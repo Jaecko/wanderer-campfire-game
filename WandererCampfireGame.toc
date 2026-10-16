@@ -1,0 +1,35 @@
+## Interface: 16001
+## Title: Wanderer Campfire Game
+## Notes: A little idle game in a Wanderer window: your campfire grows, companions set out on expeditions across Azeroth, and your real journey (zones explored, professions, level) makes it stronger.
+## Notes-frFR: Un petit jeu idle dans une fenêtre Wanderer : votre feu de camp grandit, des compagnons partent en expédition à travers Azeroth, et votre vrai voyage (zones explorées, métiers, niveau) le renforce.
+## Notes-deDE: Ein kleines Idle-Spiel in einem Wanderer-Fenster: dein Lagerfeuer wächst, Gefährten ziehen auf Expeditionen durch Azeroth, und deine echte Reise (erkundete Gebiete, Berufe, Stufe) macht es stärker.
+## Notes-esES: Un pequeño juego idle en una ventana de Wanderer: tu hoguera crece, los compañeros parten de expedición por Azeroth y tu viaje real (zonas exploradas, profesiones, nivel) la fortalece.
+## Notes-esMX: Un pequeño juego idle en una ventana de Wanderer: tu fogata crece, los compañeros parten de expedición por Azeroth y tu viaje real (zonas exploradas, profesiones, nivel) la fortalece.
+## Notes-itIT: Un piccolo gioco idle in una finestra di Wanderer: il tuo fuoco da campo cresce, i compagni partono in spedizione per Azeroth e il tuo vero viaggio (zone esplorate, professioni, livello) lo rafforza.
+## Notes-ptBR: Um pequeno jogo idle numa janela do Wanderer: sua fogueira cresce, companheiros partem em expedições por Azeroth e sua jornada real (zonas exploradas, profissões, nível) a fortalece.
+## Notes-ruRU: Небольшая idle-игра в окне Wanderer: ваш костёр разгорается, спутники отправляются в походы по Азероту, а ваше настоящее путешествие (исследованные зоны, профессии, уровень) делает лагерь сильнее.
+## Notes-koKR: Wanderer 창 속의 작은 방치형 게임: 모닥불이 커지고, 동료들이 아제로스 곳곳으로 원정을 떠나며, 실제 여정(탐험한 지역, 전문 기술, 레벨)이 야영지를 강하게 만듭니다.
+## Notes-zhCN: Wanderer 窗口中的小型放置游戏：篝火不断壮大，同伴们踏上穿越艾泽拉斯的远征，而你真实的旅程（探索的区域、专业、等级）让营地更强大。
+## Notes-zhTW: Wanderer 視窗中的小型放置遊戲：營火不斷壯大，同伴們踏上穿越艾澤拉斯的遠征，而你真實的旅程（探索的區域、專業、等級）讓營地更強大。
+## Category: Minigames
+## Version: 0.2.3
+## X-Curse-Project-ID: 1747878
+## Author: Jaekco
+## IconTexture: Interface\Icons\Spell_Fire_Fire
+## RequiredDeps: Wanderer
+## SavedVariablesPerCharacter: WandererCampfireGameDB
+## X-Website: https://wanderer-addon.com
+
+Locales.lua
+Locales\[TextLocale].lua
+Data.lua
+World.lua
+Game.lua
+Window.lua
+Camp.lua
+Companions.lua
+Expeditions.lua
+Road.lua
+Orders.lua
+Trophies.lua
+Feats.lua

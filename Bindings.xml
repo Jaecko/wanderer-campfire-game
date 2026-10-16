@@ -1,0 +1,5 @@
+<Bindings>
+	<Binding name="WANDERERCAMPFIREGAME_TOGGLE" header="WANDERERCAMPFIREGAME">
+		WandererCampfireGame_Toggle()
+	</Binding>
+</Bindings>
