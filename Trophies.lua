@@ -9,56 +9,38 @@ local U = W and W.Util
 local Skin = W and W.Skin
 
 local view = {}
-local rows = {}
-
-local function Gather()
-	rows = ns.PlaceRows(function(place) return { area = place.area, name = ns.PlaceName(place.area), color = Skin.COLORS.soft } end)
-end
 
 local function Draw()
-	Gather()
+	local rows = ns.PlaceRows(function(place) return place end)
 	local total = 0
-	for _, entry in ipairs(rows) do if entry.area then total = total + 3 end end
+	for _, place in ipairs(rows) do if place.area then total = total + 3 end end
 	local count = ns.TrophyCount()
-	view.count:SetText(L.TROPHIES_COUNT:format(count, total) .. (count >= 10
-		and ("   " .. L.PROF_REWARDS:format(math.floor(count / 10) * ns.TROPHY_BONUS * 100)) or ""))
-	local list = view.trophies
-	local offset = list:Clamp(#rows)
 	local trophies = ns.State().trophies
-	for index, row in ipairs(list.rows) do
-		local entry = rows[index + offset]
-		local values
-		if entry and entry.area then
-			values = {}
-			local found = trophies[entry.area] or {}
+	local list = view.list
+	list:Begin()
+	list:Text(L.TROPHIES_COUNT:format(count, total) .. (count >= 10
+		and ("   " .. L.PROF_REWARDS:format(math.floor(math.floor(count / 10) * ns.TROPHY_BONUS * 100 + 0.5))) or ""), "gold", "GameTooltipText")
+	list:Text(L.TROPHIES_INTRO, "soft")
+	for _, place in ipairs(rows) do
+		if place.header then
+			list:Caption(place.header)
+		else
+			local found, have = trophies[place.area] or {}, 0
+			local parts = {}
 			for tier = 1, 3 do
-				values["t" .. tier] = found[tier] and U.Colorize(L["TROPHY_" .. tier], 1, 0.82, 0)
-					or U.Colorize(L.TROPHY_MISSING, unpack(Skin.COLORS.muted))
+				if found[tier] then have = have + 1 end
+				parts[tier] = found[tier] and U.Colorize(L["TROPHY_" .. tier], 1, 0.82, 0) or U.Colorize(L["TROPHY_" .. tier], unpack(Skin.COLORS.muted))
 			end
+			list:Row({ icon = "Interface\\Icons\\INV_Misc_Gem_Pearl_04", grey = have == 0, title = ns.PlaceName(place.area), color = have == 3 and Skin.COLORS.gold or Skin.COLORS.text, sub = table.concat(parts, "  ·  "),
+				chip = have .. " / 3", tone = have == 3 and "gold" or "grey", height = 46 })
 		end
-		row:Fill(entry, false, values)
 	end
+	list:Done()
 end
 
 local function Build(page)
-	view.count = Skin.Text(page, "GameTooltipText", "gold")
-	view.count:SetPoint("TOPLEFT", page, "TOPLEFT", 0, 0)
-	local intro = Skin.Text(page, "GameTooltipTextSmall", "soft")
-	intro:SetPoint("TOPLEFT", view.count, "BOTTOMLEFT", 0, -6)
-	intro:SetWidth(page.width)
-	intro:SetJustifyH("LEFT")
-	intro:SetText(L.TROPHIES_INTRO)
-	view.trophies = Skin.Table(page, {
-		width = page.width, rows = 16, rowHeight = 24, icon = false,
-		columns = {
-			{ key = "t1", title = L.TROPHY_1, width = 150, justify = "LEFT" },
-			{ key = "t2", title = L.TROPHY_2, width = 150, justify = "LEFT" },
-			{ key = "t3", title = L.TROPHY_3, width = 150, justify = "LEFT" },
-		},
-		onClick = function() end, onDraw = Draw,
-	})
-	view.trophies:SetPoint("TOPLEFT", intro, "BOTTOMLEFT", 0, -12)
-	view.trophies:Fit(page.height - 60)
+	view.list = ns.UI.List(page)
 end
 
-ns.AddPage("trophies", L.TAB_TROPHIES, Build, Draw)
+ns.AddPage("trophies", L.TAB_TROPHIES, Build, Draw, { parent = "more", icon = "Interface\\Icons\\INV_Misc_Gem_Pearl_04", desc = L.TROPHIES_DESC,
+	summary = function() return tostring(ns.TrophyCount()), "gold" end })

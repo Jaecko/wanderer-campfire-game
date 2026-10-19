@@ -5,7 +5,6 @@ local L = ns.L
 -- what they brought; hovered: who was wounded, the levels gained, a trophy found).
 
 local W = Wanderer
-local Skin = W and W.Skin
 
 local view = {}
 
@@ -18,72 +17,43 @@ local function Names(ids)
 	return table.concat(names, ", ")
 end
 
-local function DrawRunning()
-	local list = view.running
-	local all = ns.State().expeditions
-	table.sort(all, function(a, b) return a.finish < b.finish end)
-	local offset = list:Clamp(#all)
-	for index, row in ipairs(list.rows) do
-		local expedition = all[index + offset]
-		local entry, values
-		if expedition then
-			entry = { name = ns.PlaceName(expedition.area), color = W.Skin.COLORS.soft,
-				tip = { ns.PlaceName(expedition.area), Names(expedition.members), L.CHANCE:format(math.floor(expedition.chance * 100 + 0.5)) } }
-			values = { who = Names(expedition.members), back = L.BACK_IN:format(ns.Left(expedition.finish - time())) }
-		end
-		row:Fill(entry, false, values, expedition and ns.KindName(expedition.kind), "grey")
-	end
-	list.empty:SetShown(#all == 0)
-end
-
-local function DrawLog()
-	local list = view.log
-	local all = ns.State().log
-	local offset = list:Clamp(#all)
-	for index, row in ipairs(list.rows) do
-		local told = all[index + offset]
-		local entry, values
-		if told then
-			local gains = { L.LOG_GAINS:format(ns.Number(told.renown or 0), ns.Number(told.embers or 0)) }
-			if told.supplies then gains[#gains + 1] = L.LOG_SUPPLIES:format(ns.Number(told.supplies)) end
-			if told.trophy then gains[#gains + 1] = L["TROPHY_" .. told.trophy] end
-			local tip = { ns.PlaceName(told.area), told.won and L.WON or L.LOST }
-			if told.up then tip[#tip + 1] = L.LOG_UP:format(told.up) end
-			if told.hurt and told.hurt[1] then tip[#tip + 1] = L.LOG_HURT:format(table.concat(told.hurt, ", ")) end
-			entry = { name = ns.PlaceName(told.area), color = W.Skin.COLORS.soft, tip = tip }
-			values = { gains = table.concat(gains, ", "), when = date("%H:%M", told.at) }
-		end
-		row:Fill(entry, false, values, told and (told.won and L.WON or L.LOST), told and (told.won and "green" or "red"))
-	end
-	list.empty:SetShown(#all == 0)
-end
-
 local function Draw()
-	DrawRunning()
-	DrawLog()
+	local s = ns.State()
+	local list = view.list
+	list:Begin()
+	local all = {}
+	for index, expedition in ipairs(s.expeditions) do all[index] = expedition end
+	table.sort(all, function(a, b) return a.finish < b.finish end)
+	list:Caption(L.RUNNING, L.ROAD_COUNT:format(#all, ns.Tier().slots))
+	if #all == 0 then list:Text(L.RUNNING_EMPTY, "muted") end
+	for _, expedition in ipairs(all) do
+		local left = expedition.finish - time()
+		local length = math.max(1, expedition.finish - (expedition.start or expedition.finish))
+		list:Row({ icon = ns.KindIcon(expedition.kind), title = ns.PlaceName(expedition.area), sub = Names(expedition.members) .. "\n"
+			.. (left > 0 and L.BACK_IN:format(ns.Left(left)) or L.BACK_NOW), wrap = true,
+			chip = ns.KindName(expedition.kind), tone = "grey", bar = expedition.start and (1 - math.max(0, left) / length) or nil,
+			tip = { ns.PlaceName(expedition.area), Names(expedition.members), L.CHANCE:format(math.floor(expedition.chance * 100 + 0.5)) } })
+	end
+	list:Caption(L.LOG)
+	if #s.log == 0 then list:Text(L.LOG_EMPTY, "muted") end
+	for _, told in ipairs(s.log) do
+		local gains = { ns.Gains({ renown = told.renown, embers = told.embers, supplies = told.supplies }, true) }
+		if told.trophy then gains[#gains + 1] = L["TROPHY_" .. told.trophy] end
+		local tip = { ns.PlaceName(told.area), told.won and L.WON or L.LOST }
+		if told.up then tip[#tip + 1] = L.LOG_UP:format(told.up) end
+		if told.hurt and told.hurt[1] then tip[#tip + 1] = L.LOG_HURT:format(table.concat(told.hurt, ", ")) end
+		list:Row({ title = ns.PlaceName(told.area) .. "   " .. W.Util.Colorize(date("%H:%M", told.at), 0.56, 0.53, 0.46),
+			icon = ns.KindIcon(told.kind or "zone"), sub = table.concat(gains, "   "), wrap = true, chip = told.won and L.WON or L.LOST, tone = told.won and "green" or "red", tip = tip })
+	end
+	list:Done()
 end
 
 local function Build(page)
-	local caption = Skin.Caps(page, L.RUNNING, "gold")
-	caption:SetPoint("TOPLEFT", page, "TOPLEFT", 0, 0)
-	view.running = Skin.Table(page, {
-		width = page.width, rows = 5, rowHeight = 32, icon = false, titles = false,
-		columns = { { key = "who", width = 380, justify = "LEFT" }, { key = "back", width = 180, justify = "LEFT" } },
-		onClick = function() end, onDraw = DrawRunning,
-	})
-	view.running:SetPoint("TOPLEFT", caption, "BOTTOMLEFT", 0, -6)
-	view.running:Fit(5 * 32)
-	view.running.empty:SetText(L.RUNNING_EMPTY)
-	local caption2 = Skin.Caps(page, L.LOG, "gold")
-	caption2:SetPoint("TOPLEFT", view.running, "BOTTOMLEFT", 0, -16)
-	view.log = Skin.Table(page, {
-		width = page.width, rows = 8, rowHeight = 30, icon = false, titles = false,
-		columns = { { key = "gains", width = 420, justify = "LEFT" }, { key = "when", width = 70 } },
-		onClick = function() end, onDraw = DrawLog,
-	})
-	view.log:SetPoint("TOPLEFT", caption2, "BOTTOMLEFT", 0, -6)
-	view.log:Fit(8 * 30)
-	view.log.empty:SetText(L.LOG_EMPTY)
+	view.list = ns.UI.List(page)
 end
 
-ns.AddPage("road", L.TAB_ROAD, Build, Draw)
+ns.AddPage("road", L.TAB_ROAD, Build, Draw, { parent = "more", icon = "Interface\\Icons\\INV_Misc_Map_01", desc = L.ROAD_DESC,
+	summary = function()
+		local count = #ns.State().expeditions
+		if count > 0 then return L.ROAD_COUNT:format(count, ns.Tier().slots), "gold" end
+	end })

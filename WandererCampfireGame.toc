@@ -12,7 +12,7 @@
 ## Notes-zhCN: Wanderer 窗口中的小型放置游戏：篝火不断壮大，同伴们踏上穿越艾泽拉斯的远征，而你真实的旅程（探索的区域、专业、等级）让营地更强大。
 ## Notes-zhTW: Wanderer 視窗中的小型放置遊戲：營火不斷壯大，同伴們踏上穿越艾澤拉斯的遠征，而你真實的旅程（探索的區域、專業、等級）讓營地更強大。
 ## Category: Minigames
-## Version: 0.2.3
+## Version: 0.3.0
 ## X-Curse-Project-ID: 1747878
 ## Author: Jaekco
 ## IconTexture: Interface\Icons\Spell_Fire_Fire
@@ -26,6 +26,8 @@ Data.lua
 World.lua
 Game.lua
 Window.lua
+Fire.lua
+Ashes.lua
 Camp.lua
 Companions.lua
 Expeditions.lua

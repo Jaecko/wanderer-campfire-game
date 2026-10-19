@@ -2,8 +2,8 @@ local _, ns = ...
 
 -- The rules. Nothing runs between two looks: each time the camp is looked at (the window, a returning
 -- expedition, the login), the time gone by is counted at once: what the fire made (12 hours at most while you
--- were away), the expeditions back, the hurt healed, a fireside event, the orders, new candidates. One timer
--- only, for the next expedition to come back (its notice).
+-- were away, more with the ashes' slumbering embers), the expeditions back, the hurt healed, a fireside event,
+-- the orders, new candidates. One timer only, for the next expedition to come back (its notice).
 
 local W = Wanderer
 local U = W and W.Util
@@ -21,7 +21,7 @@ function ns.State()
 	if state then return state end
 	WandererCampfireGameDB = type(WandererCampfireGameDB) == "table" and WandererCampfireGameDB or {}
 	state = WandererCampfireGameDB
-	state.tier = math.max(1, math.min(#ns.TIERS, math.floor(tonumber(state.tier) or 1)))
+	state.tier = math.max(1, math.floor(tonumber(state.tier) or 1))
 	for _, key in ipairs({ "embers", "provisions", "renown", "supplies" }) do
 		state[key] = math.max(0, tonumber(state[key]) or 0)
 	end
@@ -40,11 +40,35 @@ function ns.State()
 	state.lived = state.lived or {} -- area -> bosses your character killed there
 	state.feats = state.feats or {}
 	state.prestige = state.prestige or 0
+	state.ashes = tonumber(state.ashes) or 0 -- the ashes not spent
+	state.ashesTotal = tonumber(state.ashesTotal) or 0 -- every ash ever gathered (its bonus)
+	state.rekindles = tonumber(state.rekindles) or 0
+	state.choosing = state.choosing == true or nil -- (between two fires: the ashes to spend)
+	state.ashTree = type(state.ashTree) == "table" and state.ashTree or {} -- node -> level
+	state.gens = type(state.gens) == "table" and state.gens or {} -- producer -> how many owned
+	state.upgrades = type(state.upgrades) == "table" and state.upgrades or {} -- upgrade id -> bought
+	state.total = tonumber(state.total) or 0 -- every ember the fire ever made
+	state.clicks = tonumber(state.clicks) or 0
 	return state
 end
 
 function ns.Lit() return ns.State().lit ~= nil end
-function ns.Tier() return ns.TIERS[ns.State().tier] end
+function ns.AshLevel(key) return ns.State().ashTree[key] or 0 end
+-- A tier of the fire: one of the list, or past the seventh one of its endless levels (each dearer).
+local eternal = {}
+function ns.TierAt(index)
+	local last = #ns.TIERS
+	if index <= last then return ns.TIERS[index] end
+	if eternal[index] then return eternal[index] end
+	local base, past = ns.TIERS[last], index - last
+	local tier = {}
+	for key, value in pairs(base) do tier[key] = value end
+	tier.embers = base.embers * ns.ETERNAL_GROWTH ^ past
+	tier.renown = floor(ns.ETERNAL_RENOWN_BASE * ns.ETERNAL_RENOWN ^ (past - 1))
+	eternal[index] = tier
+	return tier
+end
+function ns.Tier() return ns.TierAt(ns.State().tier) end
 function ns.Level(key) return ns.State().buildings[key] or 0 end
 
 -- Bonuses -------------------------------------------------------------------------------------------------
@@ -72,36 +96,254 @@ function ns.TrophyCount()
 	return count
 end
 
--- What the fire makes an hour, what it holds.
-function ns.Rates()
-	local tier = ns.State().tier
+-- What the fire makes an hour.
+function ns.Rates(away)
+	local tier = min(ns.State().tier, #ns.TIERS)
 	local store = 1 + 0.5 * ns.Level("store")
 	local again = 1 + ns.PRESTIGE_BONUS * ns.State().prestige
-	local embers = ns.TIERS[tier].rate * again
+	local embers = ns.PerSecond(away) * HOUR
 	local provisions = ns.PROVISIONS_RATE * tier * (1 + 0.3 * ns.Level("kitchen")) * (1 + ns.ProfessionBonus("provisions")) * again
+		* (away and 1 or ns.HearthFactor())
 	return {
 		embers = embers, provisions = provisions,
-		embersCap = floor(ns.TIERS[tier].cap * store), provisionsCap = floor(ns.PROVISIONS_CAP * tier * store),
+		embersCap = math.huge, provisionsCap = floor(ns.PROVISIONS_CAP * tier * store), -- (embers: no cap any more)
 	}
 end
 
+-- The clicker ---------------------------------------------------------------------------------------------
+
+local function Earn(amount)
+	if amount ~= amount or amount <= 0 or amount >= math.huge then return end
+	local s = ns.State()
+	s.embers = s.embers + amount
+	s.total = s.total + amount
+	s.run = (s.run or s.total - amount) + amount -- (this start's, since the last new start)
+end
+
+function ns.Owned(key) return ns.State().gens[key] or 0 end
+
+-- What count more of a producer costs (its price grows with each one).
+function ns.GenPrice(key, count)
+	local generator, owned, total = ns.GENERATOR[key], ns.Owned(key), 0
+	local cheaper = (1 - ns.MEMORY) ^ ns.AshLevel("memory")
+	for index = 0, (count or 1) - 1 do total = total + ceil(generator.cost * cheaper * ns.GENERATOR_GROWTH ^ (owned + index)) end
+	return total
+end
+
+-- Your character by a real campfire of the game (its "Cozy Fire"), its furniture around: what the camp makes
+-- grows while you stay there (read once a second).
+local hearth, hearthAt = 1, -1
+function ns.HearthFactor()
+	local now = GetTime and GetTime() or 0
+	if now - hearthAt < 1 then return hearth end
+	hearthAt = now
+	local get = C_UnitAuras and C_UnitAuras.GetPlayerAuraBySpellID
+	local fire, furniture = false, 0
+	if get then
+		for _, id in ipairs(ns.HEARTH_AURAS) do if U.Clean(U.Safe(get, id)) then fire = true end end
+		for _, id in ipairs(ns.FURNITURE_AURAS) do if U.Clean(U.Safe(get, id)) then furniture = furniture + 1 end end
+	end
+	hearth = fire and (1 + ns.HEARTH_BONUS + ns.FURNITURE_BONUS * min(ns.FURNITURE_MAX, furniture)) or 1
+	return hearth
+end
+
+-- What everything is multiplied by: the companions at the fire, its tier, your new starts, your trophies, a
+-- real campfire of the game (away: not counted, the warmth is for the moments you are there).
+-- The companions at the fire: as many as its tents hold
+function ns.Multiplier(away)
+	local s = ns.State()
+	return (away and 1 or ns.HearthFactor()) * (1 + ns.COMPANION_BONUS * min(#s.companions, ns.MaxCompanions())) * (1 + ns.TIER_BONUS * (s.tier - 1)) * (1 + ns.PRESTIGE_BONUS * s.prestige)
+		* (1 + ns.TROPHY_BONUS * floor(ns.TrophyCount() / 10))
+		* (1 + ns.ASH_BONUS * s.ashesTotal) * (1 + ns.FERVOR * ns.AshLevel("fervor"))
+end
+
+-- (each producer's ranks, counted when one is bought; the rest counted again a few times a second at most)
+local ranksOf
+local function Ranks(key)
+	if not ranksOf then
+		ranksOf = {}
+		for id in pairs(ns.State().upgrades) do
+			local which = id:match("^rank:([^:]+):")
+			if which then ranksOf[which] = (ranksOf[which] or 0) + 1 end
+		end
+	end
+	return ranksOf[key] or 0
+end
+local perSecond, perSecondAt
+local function Forget() ranksOf, perSecondAt = nil, nil end
+ns.ForgetRates = Forget
+
+-- What one producer of a kind makes a second, and all of them.
+function ns.GenEach(key, away) return ns.GENERATOR[key].rate * 2 ^ Ranks(key) * ns.Multiplier(away) end
+function ns.GenTotal(key, away) return ns.GenEach(key, away) * ns.Owned(key) end
+
+-- What the fire makes a second: its own small flame, then every producer (away: without a real campfire's
+-- warmth). Counted once a tenth of a second at most.
+function ns.PerSecond(away)
+	local now = GetTime and GetTime() or 0
+	if not away and perSecondAt and now - perSecondAt < 0.1 then return perSecond end
+	local multiplier = ns.Multiplier(away)
+	local total = ns.Tier().rate / HOUR * multiplier
+	for _, generator in ipairs(ns.GENERATORS) do
+		total = total + generator.rate * 2 ^ Ranks(generator.key) * multiplier * ns.Owned(generator.key)
+	end
+	if away then return total end
+	perSecond, perSecondAt = total, now
+	return total
+end
+
+-- What a click on the fire brings.
+function ns.ClickPower()
+	local s = ns.State()
+	local power, share = 1, 0
+	for _, upgrade in ipairs(ns.CLICK_UPGRADES) do
+		if s.upgrades["click:" .. upgrade.key] then
+			if upgrade.double then power = power * 2 end
+			share = share + (upgrade.share or 0)
+		end
+	end
+	share = share + ns.CLICK_EMBER.share * ns.Embers()
+	-- (breath: the whole click stronger, its share of what the fire makes a second too)
+	return (power * (1 + ns.TIER_BONUS * (s.tier - 1)) * ns.HearthFactor() + share * ns.PerSecond()) * (1 + ns.BREATH * ns.AshLevel("breath"))
+end
+
+function ns.Click()
+	if not ns.Lit() or ns.State().choosing then return 0 end
+	local gain = ns.ClickPower()
+	Earn(gain)
+	local s = ns.State()
+	s.clicks = s.clicks + 1
+	return gain
+end
+
+-- A producer shown (once you have held a share of its price, or own one).
+function ns.Revealed(key)
+	local s = ns.State()
+	return ns.Owned(key) > 0 or (s.run or s.total) >= ns.GENERATOR[key].cost * ns.REVEAL
+end
+
+function ns.BuyGenerator(key, count)
+	count = count or 1
+	local s, price = ns.State(), ns.GenPrice(key, count)
+	if not ns.Lit() or s.choosing or s.embers < price then return false end
+	s.embers = s.embers - price
+	s.gens[key] = ns.Owned(key) + count
+	Forget()
+	return true
+end
+
+-- A producer's rank (its index): when it comes (so many owned), its price (times the producer's first price);
+-- past the list, without end.
+function ns.RankAt(index)
+	local last = #ns.RANKS
+	if index <= last then return ns.RANKS[index] end
+	local base, past = ns.RANKS[last], index - last
+	return { at = base.at + ns.RANK_EVERY * past, price = base.price * ns.RANK_PRICE ^ past }
+end
+
+-- The living embers bought (the click's upgrades without end, after the list).
+function ns.Embers()
+	local s, count = ns.State(), 0
+	while s.upgrades["click:ember:" .. (count + 1)] do count = count + 1 end
+	return count
+end
+
+-- The upgrades within reach, the cheapest first: { id, kind ("rank" or "click"), key, rank, price, icon }.
+function ns.Upgrades()
+	local s, list = ns.State(), {}
+	for _, upgrade in ipairs(ns.CLICK_UPGRADES) do
+		local id = "click:" .. upgrade.key
+		if not s.upgrades[id] and (s.run or s.total) >= upgrade.price * ns.CLICK_REVEAL then
+			list[#list + 1] = { id = id, kind = "click", key = upgrade.key, price = upgrade.price, icon = upgrade.icon, upgrade = upgrade }
+		end
+	end
+	-- (the click's last upgrade bought: a living ember, then another...)
+	local last = ns.CLICK_UPGRADES[#ns.CLICK_UPGRADES]
+	if s.upgrades["click:" .. last.key] then
+		local count = ns.Embers() + 1
+		local price = last.price * ns.CLICK_PRICE ^ count
+		if (s.run or s.total) >= price * ns.CLICK_REVEAL then
+			list[#list + 1] = { id = "click:ember:" .. count, kind = "click", key = "ember", rank = count, price = price,
+				icon = ns.CLICK_EMBER.icon, upgrade = ns.CLICK_EMBER }
+		end
+	end
+	for _, generator in ipairs(ns.GENERATORS) do
+		-- (its next rank only, in order)
+		local index = 1
+		while s.upgrades["rank:" .. generator.key .. ":" .. index] do index = index + 1 end
+		local rank = ns.RankAt(index)
+		if ns.Owned(generator.key) >= rank.at then
+			list[#list + 1] = { id = "rank:" .. generator.key .. ":" .. index, kind = "rank", key = generator.key, rank = index + 1,
+				price = generator.cost * rank.price, icon = generator.icon }
+		end
+	end
+	table.sort(list, function(a, b) return a.price < b.price end)
+	return list
+end
+
+function ns.BuyUpgrade(id)
+	local s = ns.State()
+	if not ns.Lit() or s.choosing then return false end
+	for _, upgrade in ipairs(ns.Upgrades()) do
+		if upgrade.id == id and s.embers >= upgrade.price then
+			s.embers = s.embers - upgrade.price
+			s.upgrades[id] = true
+			Forget()
+			return true
+		end
+	end
+	return false
+end
+
+-- Provisions added, up to the larder's cap (what is above it already, from an event or an older cap, kept).
+local function Stock(amount, cap)
+	local s = ns.State()
+	s.provisions = max(s.provisions, min(cap, s.provisions + amount))
+end
+
+-- While the window is open: what the fire made since the last frame (the provisions too).
+local Relevel -- (below: an older save's companions on the gentler levels)
+
+function ns.Tick(elapsed)
+	if not ns.Lit() or elapsed <= 0 then return end
+	-- (a long freeze of the game: counted by Produce, from the last moment seen)
+	if elapsed > 1 then
+		local back = ns.Update()
+		if ns.Back then ns.Back(back) end
+		return
+	end
+	Relevel()
+	if not ns.State().choosing then Earn(ns.PerSecond() * elapsed) end
+	local rates = ns.Rates()
+	Stock(rates.provisions * elapsed / HOUR, rates.provisionsCap)
+	ns.State().last = Now()
+end
+
+-- Embers given by a choice or an incident, in proportion to what the fire makes (never less than written).
+local function EmberScale() return max(1, ns.PerSecond() / 5) end
+
 -- Time going by -------------------------------------------------------------------------------------------
+
+-- How long the fire burns while you are away (longer with the ashes' slumber).
+function ns.Offline() return ns.OFFLINE + ns.SLUMBER * ns.AshLevel("slumber") end
 
 local function Produce(now)
 	local s = ns.State()
 	local from = s.last or now
-	local seconds = min(max(0, now - from), ns.OFFLINE)
+	local seconds = min(max(0, now - from), ns.Offline())
 	s.last = now
-	if seconds <= 0 then return end
-	local rates = ns.Rates()
-	s.embers = min(rates.embersCap, s.embers + rates.embers * seconds / HOUR)
-	s.provisions = min(rates.provisionsCap, s.provisions + rates.provisions * seconds / HOUR)
+	-- (a second or less: the window's own moments, already counted by Tick)
+	if seconds <= 1 then return end
+	local rates = ns.Rates(true)
+	if not s.choosing then Earn(ns.PerSecond(true) * seconds) end
+	Stock(rates.provisions * seconds / HOUR, rates.provisionsCap)
 end
 
 -- Companions ---------------------------------------------------------------------------------------------
 
 function ns.LevelCap() return min(60, max(10, ns.PlayerLevel() + 5)) end
-function ns.XPNeed(level) return floor(60 * level ^ 1.6) end
+-- (gentle enough for the companions to follow your own level through the tiers)
+function ns.XPNeed(level) return floor(40 * level ^ 1.3) end
 
 function ns.Companion(id)
 	for _, companion in ipairs(ns.State().companions) do
@@ -171,7 +413,7 @@ end
 -- Forged gear: what the next level costs, whether the forge allows it.
 function ns.GearCost(companion)
 	local level = (companion.gear or 0) + 1
-	return floor(100 * level ^ 1.6), level
+	return floor(5000 * level ^ 2.2), level * level -- (embers, supplies: the forge, where supplies go)
 end
 
 function ns.CanForge(companion)
@@ -209,11 +451,20 @@ end
 
 local function GainXP(companion, amount)
 	if companion.level >= ns.LevelCap() then return end
+	amount = amount or 0
 	companion.xp = (companion.xp or 0) + floor(amount * (1 + Trait(companion, "xp")))
 	while companion.level < ns.LevelCap() and companion.xp >= ns.XPNeed(companion.level) do
 		companion.xp = companion.xp - ns.XPNeed(companion.level)
 		companion.level = companion.level + 1
 	end
+end
+
+-- (a save made before the gentler levels: its companions' experience counted again, once)
+function Relevel()
+	local s = ns.State()
+	if s.levelCurve == 2 then return end
+	s.levelCurve = 2
+	for _, companion in ipairs(s.companions or {}) do GainXP(companion, 0) end
 end
 
 local function UsedNames()
@@ -302,10 +553,7 @@ end
 
 -- The fire's tiers and the buildings ----------------------------------------------------------------------
 
-function ns.NextTier()
-	local s = ns.State()
-	return ns.TIERS[s.tier + 1]
-end
+function ns.NextTier() return ns.TierAt(ns.State().tier + 1) end
 
 function ns.CanRaise()
 	local s, nextTier = ns.State(), ns.NextTier()
@@ -319,14 +567,47 @@ end
 function ns.Raise()
 	if not ns.CanRaise() then return false end
 	local s, nextTier = ns.State(), ns.NextTier()
+	Forget()
 	s.renown, s.embers = s.renown - nextTier.renown, s.embers - nextTier.embers
 	s.tier = s.tier + 1
 	return true
 end
 
+-- Trades at the camp (the peddler's supplies, a feast's renown): how many were made lately (forgotten by half
+-- every TRADE_HALF_LIFE), what the next costs in embers, what it gives.
+local function Traded(kind)
+	local s = ns.State()
+	s.trades = s.trades or {}
+	local trade = s.trades[kind] or { count = 0, at = Now() }
+	return trade.count * 0.5 ^ ((Now() - trade.at) / ns.TRADE_HALF_LIFE), trade
+end
+
+function ns.TradeCost(kind)
+	local trade = ns.TRADES[kind]
+	local recent = Traded(kind)
+	local price = max(trade.least, ns.PerSecond(true) * trade.seconds) * ns.TRADE_GROWTH ^ recent
+		* (1 - ns.PEDDLER) ^ ns.AshLevel("peddler")
+	return floor(price), trade.gives + (trade.perTier or 0) * (min(ns.State().tier, #ns.TIERS) - 1)
+end
+
+function ns.CanTrade(kind)
+	return ns.State().embers >= ns.TradeCost(kind)
+end
+
+function ns.Trade(kind)
+	if not ns.CanTrade(kind) then return false end
+	local s = ns.State()
+	local price, gives = ns.TradeCost(kind)
+	s.embers = s.embers - price
+	s[kind] = s[kind] + gives
+	local recent = Traded(kind)
+	s.trades[kind] = { count = recent + 1, at = Now() }
+	return gives
+end
+
 function ns.BuildingCost(key)
 	local building, level = ns.BUILDING[key], ns.Level(key)
-	return floor(building.embers * ns.BUILDING_GROWTH ^ level), building.supplies * (level + 1)
+	return floor(building.embers * ns.BUILDING_SCALE * ns.BUILDING_GROWTH ^ level), building.supplies * (level + 1)
 end
 
 function ns.CanBuild(key)
@@ -352,18 +633,18 @@ end
 
 -- Every place: { kind, area, low, high, open, why (when closed) }.
 function ns.Places()
-	local places, level, s = {}, ns.PlayerLevel(), ns.State()
+	local places, level = {}, ns.PlayerLevel()
 	for _, zone in ipairs(ns.ZONES) do
 		local open, why = ns.ZoneOpen(zone)
 		places[#places + 1] = { kind = "zone", area = zone.area, low = zone.low, high = zone.high, open = open, why = why }
 	end
 	for _, dungeon in ipairs(ns.DUNGEONS) do
-		local open = level >= dungeon.low and ns.TIERS[s.tier].party >= ns.PARTY.dungeon
+		local open = level >= dungeon.low and ns.Tier().party >= ns.PARTY.dungeon
 		places[#places + 1] = { kind = "dungeon", area = dungeon.area, low = dungeon.low, high = dungeon.high, open = open,
 			why = not open and (level < dungeon.low and "level" or "tier") or nil }
 	end
 	for _, raid in ipairs(ns.RAIDS) do
-		local open = level >= 60 and ns.TIERS[s.tier].party >= ns.PARTY.raid
+		local open = level >= 60 and ns.Tier().party >= ns.PARTY.raid
 		places[#places + 1] = { kind = "raid", area = raid.area, low = raid.low, high = raid.high, open = open,
 			why = not open and (level < 60 and "level" or "tier") or nil }
 	end
@@ -402,7 +683,8 @@ function ns.Provisions(place, minutes, members)
 	local frugal = 0
 	for _, companion in ipairs(members) do frugal = frugal + Effect(companion, "provisions") end
 	local per = place.kind == "raid" and 24 or 12
-	return ceil(#members * minutes / per * (1 - frugal / max(1, #members)))
+	-- (never more than a full larder: the longest expedition can always leave once it is full)
+	return min(ns.Rates().provisionsCap, ceil(#members * minutes / per * (1 - frugal / max(1, #members))))
 end
 
 function ns.Length(minutes, members)
@@ -455,7 +737,10 @@ function ns.Rewards(place, minutes, members)
 	local bonus = 1 + 0.08 * ns.Level("watch") + ns.ProfessionBonus("rewards") + ns.TROPHY_BONUS * floor(ns.TrophyCount() / 10)
 		+ ns.PRESTIGE_BONUS * s.prestige + ((s.lived[place.area] or 0) > 0 and ns.LIVED_BONUS or 0)
 	for _, companion in ipairs(members) do bonus = bonus + Effect(companion, "rewards") / max(1, #members) end
-	return { renown = floor(base * (0.5 + 0.25 * #members) * bonus), embers = floor(base * 4 * bonus) }
+	return { renown = floor(base * (0.5 + 0.25 * #members) * bonus * ns.RENOWN_SCALE),
+		embers = floor(base * 4 * bonus + ns.PerSecond(true) * minutes * ns.EXPEDITION_SHARE),
+		supplies = max(1, floor(Difficulty(place) / ns.SUPPLIES_PER * ns.REWARD_SCALE[place.kind] * hours ^ 0.8
+			* (0.75 + 0.25 * #members) * bonus)) }
 end
 
 local function FindTrophy(area, hours, members)
@@ -486,10 +771,12 @@ local function Resolve(expedition)
 	local share = won and 1 or 0.2
 	told.renown, told.embers = floor(rewards.renown * share), won and rewards.embers or 0
 	s.renown = s.renown + told.renown
-	s.embers = min(ns.Rates().embersCap, s.embers + told.embers)
-	if won and math.random() < 0.25 + 0.1 * expedition.minutes / 60 then
-		told.supplies = ceil(Difficulty(place) / 12 * ns.REWARD_SCALE[place.kind])
-		s.supplies = s.supplies + told.supplies
+	Earn(told.embers)
+	-- Supplies: always when won, a share of them when lost.
+	local supplies = won and rewards.supplies or floor(rewards.supplies * ns.SUPPLIES_LOST)
+	if supplies > 0 then
+		told.supplies = supplies
+		s.supplies = s.supplies + supplies
 	end
 	if won then told.trophy = FindTrophy(expedition.area, expedition.minutes / 60, members) end
 	local xp = expedition.minutes * 1.5 * ns.REWARD_SCALE[place.kind] * (won and 1 or 0.4)
@@ -532,11 +819,12 @@ local function Returns(now)
 	local s = ns.State()
 	local back = {}
 	table.sort(s.expeditions, function(a, b) return a.finish < b.finish end)
-	for index = #s.expeditions, 1, -1 do
-		local expedition = s.expeditions[index]
-		if expedition.finish <= now then
-			table.remove(s.expeditions, index)
-			table.insert(back, 1, Resolve(expedition))
+	local index = 1
+	while s.expeditions[index] do
+		if s.expeditions[index].finish <= now then
+			back[#back + 1] = Resolve(table.remove(s.expeditions, index))
+		else
+			index = index + 1
 		end
 	end
 	return back
@@ -654,16 +942,34 @@ local function AnyCompanion(free)
 	return #list > 0 and Pick(list) or nil
 end
 
+-- A choice you can pay for (what it costs, you have).
+function ns.CanAnswer(choice)
+	local s = ns.State()
+	local event = s.event and ns.EVENT[s.event]
+	local effect = event and event[choice]
+	if not effect then return false end
+	for _, key in ipairs({ "embers", "provisions", "renown", "supplies" }) do
+		local amount = effect[key]
+		if amount and amount < 0 then
+			if key == "embers" then amount = floor(amount * EmberScale()) end
+			if s[key] < -amount then return false end
+		end
+	end
+	return true
+end
+
 -- A choice made: what it brings, said back ({ key = amount, ... }, the companion concerned).
 function ns.Answer(choice)
 	local s = ns.State()
 	local event = s.event and ns.EVENT[s.event]
 	if not event or (choice ~= "a" and choice ~= "b") then return nil end
 	local effect, told = event[choice], {}
+	if not ns.CanAnswer(choice) then return nil end
 	for _, key in ipairs({ "embers", "provisions", "renown", "supplies" }) do
 		if effect[key] then
-			s[key] = max(0, s[key] + effect[key])
-			told[key] = effect[key]
+			local amount = key == "embers" and floor(effect[key] * EmberScale()) or effect[key]
+			if key == "embers" and amount > 0 then Earn(amount) else s[key] = max(0, s[key] + amount) end
+			told[key] = amount
 		end
 	end
 	local companion = AnyCompanion(true)
@@ -697,10 +1003,11 @@ function ns.Real(kind, value)
 	local rates = ns.Rates()
 	if kind == "quest" then
 		s.renown = s.renown + ns.REAL.questRenown
+		Earn(floor(50 + ns.PerSecond(true) * ns.QUEST_SHARE))
 	elseif kind == "fish" then
-		s.provisions = min(rates.provisionsCap, s.provisions + ns.REAL.fishProvisions * (value or 1))
+		Stock(ns.REAL.fishProvisions * (value or 1), rates.provisionsCap)
 	elseif kind == "cook" then
-		s.provisions = min(rates.provisionsCap, s.provisions + ns.REAL.cookProvisions)
+		Stock(ns.REAL.cookProvisions, rates.provisionsCap)
 	elseif kind == "boss" then
 		local here = U.PlainName(value)
 		for _, list in ipairs({ ns.DUNGEONS, ns.RAIDS }) do
@@ -722,7 +1029,7 @@ function ns.FeatProgress(feat)
 	if feat.stat then return s.stats[feat.stat] or 0, feat.count end
 	if feat.trophies then return ns.TrophyCount(), feat.trophies end
 	if feat.tier then return s.tier, feat.tier end
-	if feat.prestige then return s.prestige, feat.prestige end
+	if feat.prestige then return s.prestige + s.rekindles, feat.prestige end
 	if feat.companions then return #s.companions, feat.companions end
 	if feat.lived then
 		local count = 0
@@ -756,30 +1063,62 @@ local function Feats()
 	end
 end
 
--- A new start (from the outpost): the camp begins again; its trophies, feats, champions and the places you
--- lived stay; each new start makes the fire and the roads give more.
-function ns.CanRestart()
+-- A new fire (rekindled) -------------------------------------------------------------------------------
+-- Only the clicker begins again: the embers, the producers, their ranks, the click's upgrades. The tier, the
+-- buildings, the companions, the expeditions and the other resources stay. It leaves ashes.
+
+-- The ashes this fire would leave now: the cube root of what it made, counted in ASH_UNIT.
+function ns.AshesFor()
 	local s = ns.State()
-	return s.tier >= #ns.TIERS and ns.Running() == 0
+	return floor(((s.run or 0) / ns.ASH_UNIT) ^ (1 / 3) + 1e-9) -- (1000 gives 9.999...: a hair added)
 end
 
-function ns.Restart()
-	if not ns.CanRestart() then return false end
+function ns.CanRekindle() return ns.Lit() and not ns.State().choosing and ns.AshesFor() >= 1 end
+
+function ns.Rekindle()
+	if not ns.CanRekindle() then return nil end
 	local s = ns.State()
-	s.prestige = s.prestige + 1
-	s.tier, s.embers, s.provisions, s.renown, s.supplies = 1, 0, 60, 30, 0
-	s.buildings, s.orders, s.log, s.bonds, s.candidates = {}, {}, {}, {}, nil
-	s.event, s.nextEvent, s.eventArea = nil, nil, nil
-	local kept = {}
-	for _, companion in ipairs(s.companions) do
-		if companion.champion then
-			companion.hurt, companion.busy = nil, nil
-			kept[#kept + 1] = companion
-		end
+	local gained = ns.AshesFor()
+	s.ashes, s.ashesTotal, s.rekindles = s.ashes + gained, s.ashesTotal + gained, s.rekindles + 1
+	s.embers, s.gens, s.upgrades, s.run = 0, {}, {}, 0
+	-- (the old fire out: its ashes spent before the new one is lit)
+	s.choosing = true
+	Forget()
+	return gained
+end
+
+-- The new fire lit: kindling, it starts with a few producers.
+function ns.Kindle()
+	local s = ns.State()
+	if not s.choosing then return false end
+	s.choosing = nil
+	local kindling = ns.AshLevel("kindling")
+	for key, count in pairs(ns.KINDLING) do
+		if kindling > 0 then s.gens[key] = (s.gens[key] or 0) + count * kindling end
 	end
-	s.companions = kept
-	Join(NewCompanion(1))
-	Join(NewCompanion(1))
+	Forget()
+	return true
+end
+
+-- The ashes' tree: a node's next level, its price (nil at its top).
+function ns.AshCost(key)
+	local node = ns.ASH[key]
+	local level = ns.AshLevel(key)
+	if not node or (node.max and level >= node.max) then return nil end
+	return ceil(node.cost * node.growth ^ level)
+end
+
+function ns.CanBuyAsh(key)
+	local cost = ns.AshCost(key)
+	return cost ~= nil and ns.State().choosing == true and ns.State().ashes >= cost
+end
+
+function ns.BuyAsh(key)
+	if not ns.CanBuyAsh(key) then return false end
+	local s = ns.State()
+	s.ashes = s.ashes - ns.AshCost(key)
+	s.ashTree[key] = ns.AshLevel(key) + 1
+	Forget()
 	return true
 end
 
@@ -801,7 +1140,7 @@ function ns.Light()
 	s.lit, s.last, s.eventAt = Now(), Now(), Now()
 	local rates = ns.Rates()
 	s.embers = min(rates.embersCap, heritage.embers)
-	s.provisions = min(rates.provisionsCap, 30 + heritage.provisions)
+	s.provisions = 30 + heritage.provisions -- (all of it, as said: above the cap until spent)
 	s.renown, s.supplies = heritage.renown, heritage.supplies
 	-- Two to start, and the veteran.
 	Join(NewCompanion(1))
@@ -809,6 +1148,48 @@ function ns.Light()
 	if heritage.veteran then Join(NewCompanion(heritage.veteran)).veteran = true end
 	ns.Update()
 	return heritage
+end
+
+-- While you were away -------------------------------------------------------------------------------------
+-- The camp as you last saw it (its window closed, or the logout); on the next look after half an hour or more,
+-- what changed meanwhile, said once.
+
+local AWAY = 30 * 60
+
+local function Levels()
+	local total = 0
+	for _, companion in ipairs(ns.State().companions) do total = total + (companion.level or 1) end
+	return total
+end
+
+function ns.Snapshot()
+	local s = ns.State()
+	if not s.lit then return end
+	s.seen = { time = Now(), embers = s.embers, provisions = s.provisions, renown = s.renown, supplies = s.supplies,
+		expeditions = s.stats.expeditions, won = s.stats.won, trophies = ns.TrophyCount(), levels = Levels() }
+end
+
+-- What changed since you last saw the camp: { away (seconds), embers, provisions, renown, supplies, back, won,
+-- trophies, levels }, or nil (not away long enough, nothing new, or the fire never seen). Said once.
+function ns.WhileAway()
+	local s = ns.State()
+	local seen = s.seen
+	if not (s.lit and type(seen) == "table" and seen.time) then return nil end
+	local away = Now() - seen.time
+	if away < AWAY then return nil end
+	local recap = { away = away }
+	for _, key in ipairs({ "embers", "provisions", "renown", "supplies" }) do
+		recap[key] = max(0, floor((s[key] or 0) - (seen[key] or 0)))
+	end
+	recap.back = max(0, s.stats.expeditions - (seen.expeditions or 0))
+	recap.won = max(0, s.stats.won - (seen.won or 0))
+	recap.trophies = max(0, ns.TrophyCount() - (seen.trophies or 0))
+	recap.levels = max(0, Levels() - (seen.levels or 0))
+	ns.Snapshot()
+	for _, key in ipairs({ "embers", "provisions", "renown", "supplies", "back", "trophies", "levels" }) do
+		if recap[key] > 0 then return recap end
+	end
+	return nil
 end
 
 -- One look at the camp ------------------------------------------------------------------------------------
@@ -842,6 +1223,21 @@ function ns.Update()
 	end
 	ns.Schedule()
 	return back
+end
+
+-- Something waits at the camp (Wanderer's bar then pulses its word): news come while its window was closed,
+-- an expedition back, a choice by the fire, a talent to choose, the fire ready to grow, an order your bags
+-- can honor.
+function ns.Attention()
+	if not ns.Lit() then return false end
+	local s, now = ns.State(), Now()
+	if s.choosing then return true end
+	if s.unseen or s.event then return true end
+	for _, expedition in ipairs(s.expeditions) do if expedition.finish <= now then return true end end
+	for _, companion in ipairs(s.companions) do if ns.TalentDue(companion) then return true end end
+	if ns.CanRaise() and s.raiseSeen ~= s.tier then return true end
+	for _, order in ipairs(s.orders) do if ns.CanHonor(order) then return true end end
+	return false
 end
 
 -- The next expedition back: one timer, its notice.

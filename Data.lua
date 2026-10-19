@@ -8,20 +8,28 @@ local _, ns = ...
 local HOUR = 3600
 
 -- The fire, tier by tier: the level your character needs, what it costs to build (renown, embers), the
--- embers it gives an hour and how many it holds, the companions it shelters, the expeditions at once, the
--- most companions on one expedition.
+-- embers its own small flame makes an hour (rate; cap: read no more), the
+-- companions it shelters, the expeditions at once, the most companions on one expedition.
+-- (balanced by simulated playthroughs of 30 days: the clicker makes billions by the second day, so the
+-- embers of the later tiers are counted in trillions; renown grows with the expeditions of each tier)
 ns.TIERS = {
 	{ level = 1, renown = 0, embers = 0, rate = 60, cap = 600, companions = 4, slots = 1, party = 2 },
-	{ level = 10, renown = 60, embers = 400, rate = 120, cap = 1500, companions = 5, slots = 2, party = 3 },
-	{ level = 20, renown = 250, embers = 2000, rate = 240, cap = 4000, companions = 6, slots = 2, party = 5 },
-	{ level = 30, renown = 700, embers = 6000, rate = 420, cap = 9000, companions = 8, slots = 3, party = 5 },
-	{ level = 45, renown = 1800, embers = 16000, rate = 660, cap = 20000, companions = 10, slots = 4, party = 5 },
-	{ level = 55, renown = 4500, embers = 40000, rate = 960, cap = 45000, companions = 12, slots = 5, party = 10 },
+	{ level = 10, renown = 60, embers = 2000, rate = 120, cap = 2500, companions = 5, slots = 2, party = 3 },
+	{ level = 20, renown = 400, embers = 5e11, rate = 240, cap = 7500, companions = 6, slots = 2, party = 5 },
+	{ level = 30, renown = 5000, embers = 1e14, rate = 420, cap = 20000, companions = 8, slots = 3, party = 5 },
+	{ level = 45, renown = 25000, embers = 2e15, rate = 660, cap = 50000, companions = 10, slots = 4, party = 5 },
+	{ level = 55, renown = 45000, embers = 1.5e16, rate = 960, cap = 60000, companions = 12, slots = 5, party = 10 },
+	{ level = 60, renown = 80000, embers = 3e16, rate = 1300, cap = 70000, companions = 12, slots = 5, party = 10 },
 }
+-- The seventh tier, the eternal blaze, never ends: each of its levels (II, III...) asks so many times the
+-- embers and the renown of the one before; it shelters no more companions, it makes more (TIER_BONUS).
+ns.ETERNAL_GROWTH = 1.3
+ns.ETERNAL_RENOWN = 1.08
+ns.ETERNAL_RENOWN_BASE = 25000 -- (the eternal levels ask less renown than the seventh, the gate: a renown of their own)
 
 ns.OFFLINE = 12 * HOUR -- the fire burns this long while you are away, no more
-ns.PROVISIONS_RATE = 20 -- provisions an hour, for each tier of the fire
-ns.PROVISIONS_CAP = 150 -- provisions held, for each tier
+ns.PROVISIONS_RATE = 6 -- provisions an hour, for each tier of the fire (a full larder pays any expedition)
+ns.PROVISIONS_CAP = 60 -- provisions held, for each tier
 ns.EVENT_EVERY = 3 * HOUR -- a fireside event, at most this often
 ns.ORDER_LIFE = 24 * HOUR -- an order not honored leaves the board after this
 ns.ORDER_AGAIN = 2 * HOUR -- an honored order's place takes a new one after this
@@ -37,7 +45,68 @@ ns.BUILDINGS = {
 	{ key = "store", embers = 180, supplies = 2, icon = "Interface\\Icons\\INV_Crate_01" },
 	{ key = "watch", embers = 350, supplies = 5, icon = "Interface\\Icons\\INV_Misc_Spyglass_03" },
 }
-ns.BUILDING_GROWTH = 2.2 -- each level costs this much more embers than the one before
+ns.BUILDING_GROWTH = 120 -- each level costs this much more embers than the one before (the clicker grows that fast)
+ns.BUILDING_SCALE = 40 -- (the clicker's scale: the embers of a level, so many times its base)
+
+-- The clicker ---------------------------------------------------------------------------------------------
+-- What keeps the fire burning, bought with embers: each makes so many embers a second; its price grows with
+-- each one bought (GENERATOR_GROWTH). A producer shows once you have held a share of its price (REVEAL).
+ns.GENERATORS = {
+	{ key = "twigs", cost = 15, rate = 0.1, icon = "Interface\\Icons\\Spell_Fire_Fire" },
+	{ key = "woodcutter", cost = 100, rate = 1, icon = "Interface\\Icons\\INV_Axe_02" },
+	{ key = "charcoal", cost = 1100, rate = 8, icon = "Interface\\Icons\\INV_Ore_Iron_01" },
+	{ key = "bellows", cost = 12000, rate = 47, icon = "Interface\\Icons\\Trade_BlackSmithing" },
+	{ key = "firestone", cost = 130000, rate = 260, icon = "Interface\\Icons\\Spell_Fire_SelfDestruct" },
+	{ key = "brazier", cost = 1400000, rate = 1400, icon = "Interface\\Icons\\Spell_Fire_Incinerate" },
+	{ key = "elemental", cost = 20000000, rate = 7800, icon = "Interface\\Icons\\Spell_Fire_Volcano" },
+	{ key = "heart", cost = 330000000, rate = 44000, icon = "Interface\\Icons\\Spell_Fire_LavaSpawn" },
+}
+ns.GENERATOR_GROWTH = 1.15
+ns.REVEAL = 0.4
+ns.GENERATOR = {}
+for index, generator in ipairs(ns.GENERATORS) do generator.index = index ns.GENERATOR[generator.key] = generator end
+-- A producer's ranks: once so many are owned, a rank doubles what each makes (bought for so many times the
+-- producer's first price).
+-- (then, past the last, one more every RANK_EVERY owned, RANK_PRICE times dearer each)
+ns.RANKS = { { at = 1, price = 10 }, { at = 5, price = 50 }, { at = 25, price = 500 }, { at = 50, price = 50000 },
+	{ at = 100, price = 5000000 } }
+ns.RANK_EVERY, ns.RANK_PRICE = 50, 1000
+-- The click's own upgrades: the click twice as strong, or a share of what the fire makes each second added.
+ns.CLICK_UPGRADES = {
+	{ key = "poker", price = 100, double = true, icon = "Interface\\Icons\\Spell_Fire_FlameBolt" },
+	{ key = "bellows", price = 500, double = true, icon = "Interface\\Icons\\Spell_Fire_Fireball02" },
+	{ key = "glove", price = 10000, double = true, icon = "Interface\\Icons\\Spell_Fire_SealOfFire" },
+	{ key = "spark", price = 100000, share = 0.05, icon = "Interface\\Icons\\Spell_Fire_SoulBurn" },
+	{ key = "blaze", price = 10000000, share = 0.05, icon = "Interface\\Icons\\Spell_Fire_FlameShock" },
+	{ key = "inferno", price = 1000000000, share = 0.1, icon = "Interface\\Icons\\Spell_Fire_Immolation" },
+}
+-- (then, without end, a living ember: a share more of what the fire makes, CLICK_PRICE times dearer each)
+ns.CLICK_EMBER = { share = 0.05, icon = "Interface\\Icons\\Spell_Fire_Fire" }
+ns.CLICK_PRICE = 1000
+-- A real campfire of the game: its warmth (the "Cozy Fire" aura) makes the camp give more, and each piece of
+-- furniture set around it (by the auras it gives) more still.
+ns.HEARTH_AURAS = { 7353 } -- Cozy Fire
+ns.FURNITURE_AURAS = {} -- (filled as they are known)
+ns.HEARTH_BONUS = 0.5
+ns.FURNITURE_BONUS = 0.15
+ns.FURNITURE_MAX = 4
+ns.CLICK_REVEAL = 0.3 -- a click's upgrade shows once you have held this share of its price
+ns.COMPANION_BONUS = 0.05 -- each companion at the fire: so much more made
+ns.TIER_BONUS = 0.25 -- each tier of the fire beyond the first: so much more made, and the click as much
+ns.EXPEDITION_SHARE = 15 -- an expedition won brings what the fire makes in so many seconds, for each of its minutes
+ns.RENOWN_SCALE = 0.6 -- the renown an expedition brings, so many times its base (the fire's tiers and recruits ask a lot)
+ns.SUPPLIES_PER = 30 -- an expedition won brings a supply for so many levels of its place (more when long, with more)
+ns.SUPPLIES_LOST = 0.25 -- an expedition lost still brings back this share of them
+-- The embers the clicker makes, traded at the camp: a supply at the peddler, renown for a feast. The price is
+-- what the fire makes in so many seconds (a floor below it), growing with each trade (GROWTH), the growth
+-- forgotten by half every HALF_LIFE seconds.
+ns.TRADES = {
+	supplies = { seconds = 120, least = 500, gives = 1 },
+	renown = { seconds = 300, least = 1500, gives = 10, perTier = 5 },
+}
+ns.TRADE_GROWTH = 1.2
+ns.TRADE_HALF_LIFE = 6 * 3600
+ns.QUEST_SHARE = 30 -- a quest handed in: what the fire makes in so many seconds
 ns.BUILDING_MAX = 5
 ns.BUILDING = {} -- by key
 for index, building in ipairs(ns.BUILDINGS) do building.index = index ns.BUILDING[building.key] = building end
@@ -80,7 +149,7 @@ ns.NAMES = {
 }
 
 -- The expeditions' durations, in minutes (zones; dungeons; raids).
-ns.DURATIONS = { zone = { 15, 60, 240, 480 }, dungeon = { 120, 360 }, raid = { 720, 1440 } }
+ns.DURATIONS = { zone = { 15, 60, 240, 480, 720 }, dungeon = { 120, 360, 720 }, raid = { 720, 1440 } } -- (12 h: a night)
 
 -- The zones: their area (its name), the exploration achievement that opens them, their levels.
 ns.ZONES = {
@@ -126,7 +195,7 @@ ns.ZONES = {
 	{ area = 1377, achievement = 856, low = 55, high = 60 }, -- Silithus
 }
 
--- The dungeons (opened by your level) and the raids (your level 60 and the last tier of the fire).
+-- The dungeons (opened by your level) and the raids (your level 60 and a fire whose expeditions take ten).
 ns.DUNGEONS = {
 	{ area = 2437, low = 13, high = 18 }, -- Ragefire Chasm
 	{ area = 718, low = 17, high = 24 }, -- Wailing Caverns
@@ -316,6 +385,7 @@ ns.FEATS = {
 	{ key = "place", fullPlace = true, renown = 120 },
 	{ key = "tier3", tier = 3, renown = 100 },
 	{ key = "tier6", tier = 6, renown = 600 },
+	{ key = "tier7", tier = 7, renown = 1000 },
 	{ key = "veteran", companionLevel = 60, renown = 300 },
 	{ key = "champion", champion = true, renown = 150 },
 	{ key = "lived5", lived = 5, renown = 200 },
@@ -325,4 +395,24 @@ ns.FEATS = {
 
 -- A new start, from the outpost: the camp begins again, its trophies, feats and champions kept, and each new
 -- start makes the fire burn and the roads give 10 % more for good.
-ns.PRESTIGE_BONUS = 0.1
+ns.PRESTIGE_BONUS = 0.1 -- (the new starts of older versions, the whole camp begun again: their bonus kept)
+
+-- A new fire (rekindled, the Ashes' page): only the clicker begins again (embers, producers, their ranks, the
+-- click's upgrades); the tier, the buildings, the companions, the expeditions and every other resource stay.
+-- It leaves ashes: the cube root of what this fire made, counted in ASH_UNIT (eight times more embers, twice
+-- the ashes). Each ash ever gathered makes every fire ASH_BONUS more, for good; the ashes are also spent in
+-- the tree below (a level's price: cost * growth ^ level; a node has no end, but slumber: 48 hours at most).
+ns.ASH_UNIT = 1e10
+ns.ASH_BONUS = 0.1
+ns.ASH_TREE = {
+	{ key = "kindling", cost = 1, growth = 2, icon = "Interface\\Icons\\INV_TradeskillItem_03" }, -- a new fire starts with producers
+	{ key = "breath", cost = 2, growth = 2, icon = "Interface\\Icons\\Spell_Nature_Cyclone" }, -- a click half as strong again
+	{ key = "memory", cost = 3, growth = 2, icon = "Interface\\Icons\\INV_Misc_Book_09" }, -- producers 8 % cheaper (of what is left)
+	{ key = "fervor", cost = 5, growth = 1.5, icon = "Interface\\Icons\\Spell_Fire_SealOfFire" }, -- everything 15 % more
+	{ key = "slumber", max = 18, cost = 4, growth = 1.8, icon = "Interface\\Icons\\Spell_Nature_Sleep" }, -- 2 h more while away
+	{ key = "peddler", cost = 3, growth = 2, icon = "Interface\\Icons\\INV_Misc_Coin_02" }, -- trades 8 % cheaper (of what is left)
+}
+ns.ASH = {}
+for index, node in ipairs(ns.ASH_TREE) do node.index = index ns.ASH[node.key] = node end
+ns.KINDLING = { twigs = 10, woodcutter = 5, charcoal = 2 } -- a new fire's producers, for each level of kindling
+ns.FERVOR, ns.MEMORY, ns.SLUMBER, ns.PEDDLER, ns.BREATH = 0.15, 0.08, 2 * HOUR, 0.08, 0.5
