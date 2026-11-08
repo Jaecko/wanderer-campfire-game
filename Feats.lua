@@ -12,10 +12,11 @@ local function Draw()
 	local done = ns.State().feats
 	local list = view.list
 	list:Begin()
-	list:Text(L.FEATS_INTRO, "soft")
+	list:Text(L.FEATS_DESC, "soft")
 	for _, feat in ipairs(ns.FEATS) do
 		local finished = done[feat.key] ~= nil
 		local have, need = ns.FeatProgress(feat)
+		if finished then have = need end -- (done for good, whatever its measure since)
 		list:Row({ title = L["FEAT_" .. feat.key:upper()], color = finished and Skin.COLORS.gold or Skin.COLORS.text,
 			icon = finished and "Interface\\Icons\\Ability_Warrior_BattleShout" or "Interface\\Icons\\INV_Misc_Note_01", grey = not finished,
 			sub = ns.Number(math.min(have, need)) .. " / " .. ns.Number(need) .. "   " .. ns.Gains({ renown = feat.renown }, true),

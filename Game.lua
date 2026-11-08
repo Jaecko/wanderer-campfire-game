@@ -12,6 +12,7 @@ local HOUR = 3600
 local floor, ceil, min, max = math.floor, math.ceil, math.min, math.max
 
 local function Now() return time() end
+ns.Now = Now
 local function Pick(list) return list[math.random(#list)] end
 
 -- The camp of this character -----------------------------------------------------------------------------
@@ -21,9 +22,9 @@ function ns.State()
 	if state then return state end
 	WandererCampfireGameDB = type(WandererCampfireGameDB) == "table" and WandererCampfireGameDB or {}
 	state = WandererCampfireGameDB
-	state.tier = math.max(1, math.floor(tonumber(state.tier) or 1))
+	state.tier = max(1, floor(tonumber(state.tier) or 1))
 	for _, key in ipairs({ "embers", "provisions", "renown", "supplies" }) do
-		state[key] = math.max(0, tonumber(state[key]) or 0)
+		state[key] = max(0, tonumber(state[key]) or 0)
 	end
 	state.buildings = state.buildings or {}
 	state.companions = state.companions or {}
@@ -48,12 +49,15 @@ function ns.State()
 	state.gens = type(state.gens) == "table" and state.gens or {} -- producer -> how many owned
 	state.upgrades = type(state.upgrades) == "table" and state.upgrades or {} -- upgrade id -> bought
 	state.total = tonumber(state.total) or 0 -- every ember the fire ever made
-	state.clicks = tonumber(state.clicks) or 0
+	-- (an event of an older version, gone since: forgotten, or it would wait by the fire for ever)
+	if state.event and not ns.EVENT[state.event] then state.event, state.eventArea = nil, nil end
+	if state.nextEvent and not ns.EVENT[state.nextEvent] then state.nextEvent = nil end
 	return state
 end
 
 function ns.Lit() return ns.State().lit ~= nil end
 function ns.AshLevel(key) return ns.State().ashTree[key] or 0 end
+
 -- A tier of the fire: one of the list, or past the seventh one of its endless levels (each dearer).
 local eternal = {}
 function ns.TierAt(index)
@@ -80,9 +84,9 @@ local function Professions()
 	return professions
 end
 function ns.ProfessionBonus(kind)
-	local total = 0
+	local total, skills = 0, Professions()
 	for _, profession in pairs(ns.PROFESSIONS) do
-		local skill = Professions()[profession.key]
+		local skill = skills[profession.key]
 		if skill and profession[kind] then total = total + profession[kind] * min(skill, 300) / 300 end
 	end
 	return total
@@ -95,29 +99,34 @@ function ns.TrophyCount()
 	end
 	return count
 end
+-- What they bring: so much more, for every ten.
+function ns.TrophyBonus() return ns.TROPHY_BONUS * floor(ns.TrophyCount() / 10) end
 
--- What the fire makes an hour.
+-- The provisions the camp makes an hour, and the larder's cap.
 function ns.Rates(away)
 	local tier = min(ns.State().tier, #ns.TIERS)
-	local store = 1 + 0.5 * ns.Level("store")
 	local again = 1 + ns.PRESTIGE_BONUS * ns.State().prestige
-	local embers = ns.PerSecond(away) * HOUR
 	local provisions = ns.PROVISIONS_RATE * tier * (1 + 0.3 * ns.Level("kitchen")) * (1 + ns.ProfessionBonus("provisions")) * again
 		* (away and 1 or ns.HearthFactor())
-	return {
-		embers = embers, provisions = provisions,
-		embersCap = math.huge, provisionsCap = floor(ns.PROVISIONS_CAP * tier * store), -- (embers: no cap any more)
-	}
+	return { provisions = provisions, provisionsCap = ns.ProvisionsCap() }
+end
+
+-- The provisions the larder holds.
+function ns.ProvisionsCap()
+	return floor(ns.PROVISIONS_CAP * min(ns.State().tier, #ns.TIERS) * (1 + 0.5 * ns.Level("store")))
 end
 
 -- The clicker ---------------------------------------------------------------------------------------------
 
+-- Embers added; what was, given back (between two fires, none: the new one begins from nothing).
 local function Earn(amount)
-	if amount ~= amount or amount <= 0 or amount >= math.huge then return end
+	if amount ~= amount or amount <= 0 or amount >= math.huge then return 0 end
 	local s = ns.State()
+	if s.choosing then return 0 end
 	s.embers = s.embers + amount
 	s.total = s.total + amount
 	s.run = (s.run or s.total - amount) + amount -- (this start's, since the last new start)
+	return amount
 end
 
 function ns.Owned(key) return ns.State().gens[key] or 0 end
@@ -130,31 +139,35 @@ function ns.GenPrice(key, count)
 	return total
 end
 
--- Your character by a real campfire of the game (its "Cozy Fire"), its furniture around: what the camp makes
--- grows while you stay there (read once a second).
+-- Your character by a real campfire of the game (its "Cozy Fire"): what the camp makes grows while you stay
+-- there (read once a second).
 local hearth, hearthAt = 1, -1
 function ns.HearthFactor()
 	local now = GetTime and GetTime() or 0
 	if now - hearthAt < 1 then return hearth end
 	hearthAt = now
 	local get = C_UnitAuras and C_UnitAuras.GetPlayerAuraBySpellID
-	local fire, furniture = false, 0
+	local fire = false
 	if get then
 		for _, id in ipairs(ns.HEARTH_AURAS) do if U.Clean(U.Safe(get, id)) then fire = true end end
-		for _, id in ipairs(ns.FURNITURE_AURAS) do if U.Clean(U.Safe(get, id)) then furniture = furniture + 1 end end
 	end
-	hearth = fire and (1 + ns.HEARTH_BONUS + ns.FURNITURE_BONUS * min(ns.FURNITURE_MAX, furniture)) or 1
+	hearth = fire and (1 + ns.HEARTH_BONUS) or 1
 	return hearth
 end
 
 -- What everything is multiplied by: the companions at the fire, its tier, your new starts, your trophies, a
 -- real campfire of the game (away: not counted, the warmth is for the moments you are there).
--- The companions at the fire: as many as its tents hold
+-- (counted a few times a second at most while you look)
+local multiplied, multiplierAt
 function ns.Multiplier(away)
+	local now = GetTime and GetTime() or 0
+	if not away and multiplierAt and now - multiplierAt < 0.1 then return multiplied end
 	local s = ns.State()
-	return (away and 1 or ns.HearthFactor()) * (1 + ns.COMPANION_BONUS * min(#s.companions, ns.MaxCompanions())) * (1 + ns.TIER_BONUS * (s.tier - 1)) * (1 + ns.PRESTIGE_BONUS * s.prestige)
-		* (1 + ns.TROPHY_BONUS * floor(ns.TrophyCount() / 10))
+	local value = (away and 1 or ns.HearthFactor()) * (1 + ns.COMPANION_BONUS * min(#s.companions, ns.MaxCompanions())) * (1 + ns.TIER_BONUS * (s.tier - 1)) * (1 + ns.PRESTIGE_BONUS * s.prestige)
+		* (1 + ns.TrophyBonus())
 		* (1 + ns.ASH_BONUS * s.ashesTotal) * (1 + ns.FERVOR * ns.AshLevel("fervor"))
+	if not away then multiplied, multiplierAt = value, now end
+	return value
 end
 
 -- (each producer's ranks, counted when one is bought; the rest counted again a few times a second at most)
@@ -170,11 +183,11 @@ local function Ranks(key)
 	return ranksOf[key] or 0
 end
 local perSecond, perSecondAt
-local function Forget() ranksOf, perSecondAt = nil, nil end
-ns.ForgetRates = Forget
+local function Forget() ranksOf, perSecondAt, multiplierAt = nil, nil, nil end
 
--- What one producer of a kind makes a second, and all of them.
-function ns.GenEach(key, away) return ns.GENERATOR[key].rate * 2 ^ Ranks(key) * ns.Multiplier(away) end
+-- What one producer of a kind makes a second (at a multiplier), and all of them.
+local function Each(key, multiplier) return ns.GENERATOR[key].rate * 2 ^ Ranks(key) * multiplier end
+function ns.GenEach(key, away) return Each(key, ns.Multiplier(away)) end
 function ns.GenTotal(key, away) return ns.GenEach(key, away) * ns.Owned(key) end
 
 -- What the fire makes a second: its own small flame, then every producer (away: without a real campfire's
@@ -185,7 +198,7 @@ function ns.PerSecond(away)
 	local multiplier = ns.Multiplier(away)
 	local total = ns.Tier().rate / HOUR * multiplier
 	for _, generator in ipairs(ns.GENERATORS) do
-		total = total + generator.rate * 2 ^ Ranks(generator.key) * multiplier * ns.Owned(generator.key)
+		total = total + Each(generator.key, multiplier) * ns.Owned(generator.key)
 	end
 	if away then return total end
 	perSecond, perSecondAt = total, now
@@ -211,12 +224,10 @@ function ns.Click()
 	if not ns.Lit() or ns.State().choosing then return 0 end
 	local gain = ns.ClickPower()
 	Earn(gain)
-	local s = ns.State()
-	s.clicks = s.clicks + 1
 	return gain
 end
 
--- A producer shown (once you have held a share of its price, or own one).
+-- A producer shown (once this fire has made a share of its price, or you own one).
 function ns.Revealed(key)
 	local s = ns.State()
 	return ns.Owned(key) > 0 or (s.run or s.total) >= ns.GENERATOR[key].cost * ns.REVEAL
@@ -302,18 +313,16 @@ local function Stock(amount, cap)
 end
 
 -- While the window is open: what the fire made since the last frame (the provisions too).
-local Relevel -- (below: an older save's companions on the gentler levels)
 
 function ns.Tick(elapsed)
 	if not ns.Lit() or elapsed <= 0 then return end
 	-- (a long freeze of the game: counted by Produce, from the last moment seen)
 	if elapsed > 1 then
 		local back = ns.Update()
-		if ns.Back then ns.Back(back) end
+		ns.Back(back)
 		return
 	end
-	Relevel()
-	if not ns.State().choosing then Earn(ns.PerSecond() * elapsed) end
+	Earn(ns.PerSecond() * elapsed)
 	local rates = ns.Rates()
 	Stock(rates.provisions * elapsed / HOUR, rates.provisionsCap)
 	ns.State().last = Now()
@@ -327,15 +336,24 @@ local function EmberScale() return max(1, ns.PerSecond() / 5) end
 -- How long the fire burns while you are away (longer with the ashes' slumber).
 function ns.Offline() return ns.OFFLINE + ns.SLUMBER * ns.AshLevel("slumber") end
 
+-- The camp's rest left: minutes of roads that teach more.
+function ns.Rest() return max(0, tonumber(ns.State().rest) or 0) end
+
 local function Produce(now)
 	local s = ns.State()
 	local from = s.last or now
 	local seconds = min(max(0, now - from), ns.Offline())
 	s.last = now
+	-- (away longer than the fire burns: the time past it kept as the camp's rest, for the roads that leave now)
+	local past = max(0, now - from - ns.Offline())
+	if past > 0 then
+		s.rest = min(ns.REST_MAX, (tonumber(s.rest) or 0) + floor(past / 60))
+		s.restFrom, s.restNew = now, true
+	end
 	-- (a second or less: the window's own moments, already counted by Tick)
 	if seconds <= 1 then return end
 	local rates = ns.Rates(true)
-	if not s.choosing then Earn(ns.PerSecond(true) * seconds) end
+	Earn(ns.PerSecond(true) * seconds)
 	Stock(rates.provisions * seconds / HOUR, rates.provisionsCap)
 end
 
@@ -369,8 +387,6 @@ local function Effect(companion, key)
 	for _, talent in ipairs(companion.talents or {}) do total = total + ((ns.TALENT[talent] or {})[key] or 0) end
 	return total
 end
-ns.Effect = Effect
-local Trait = Effect
 
 -- What a whole party brings for a key.
 local function PartyEffect(members, key)
@@ -379,16 +395,17 @@ local function PartyEffect(members, key)
 	return total
 end
 
--- A companion's strength: its level, the forge, your smiths and miners, its gear, its trait and talents, a
--- champion more.
+-- A companion's strength: its level, the forge, your smiths and miners, its reinforced gear, its trait and
+-- talents, the item level of what it wears, a champion more.
 function ns.Power(companion, place, minutes)
 	local power = companion.level * (1 + 0.06 * ns.Level("forge") + ns.ProfessionBonus("power")
 		+ ns.GEAR_POWER * (companion.gear or 0) + Effect(companion, "power"))
 	if minutes and minutes >= 240 then power = power * (1 + Effect(companion, "longPower")) end
 	if place and place.high >= 45 then power = power * (1 + Effect(companion, "hardPower")) end
 	if companion.champion then power = power * 1.2 end
-	return power
+	return power * ns.GearFactor(companion) * (1 + ns.Rarity(companion).power)
 end
+ns.Effect = Effect
 
 -- Talents: the next one a companion may choose (its tier), nil when none waits.
 function ns.TalentDue(companion)
@@ -438,6 +455,7 @@ end
 
 -- Bonds: what the companions who went together before add to the odds.
 local function BondKey(a, b) return a < b and (a .. ":" .. b) or (b .. ":" .. a) end
+ns.BondKey = BondKey
 function ns.BondBonus(members)
 	local bonds, total = ns.State().bonds, 0
 	for i = 1, #members do
@@ -449,57 +467,97 @@ function ns.BondBonus(members)
 	return min(ns.BOND_PARTY, total)
 end
 
-local function GainXP(companion, amount)
-	if companion.level >= ns.LevelCap() then return end
-	amount = amount or 0
-	companion.xp = (companion.xp or 0) + floor(amount * (1 + Trait(companion, "xp")))
-	while companion.level < ns.LevelCap() and companion.xp >= ns.XPNeed(companion.level) do
-		companion.xp = companion.xp - ns.XPNeed(companion.level)
-		companion.level = companion.level + 1
+-- The experience a companion takes from so much (its trait and talents counted).
+local function Learned(companion, amount) return floor((amount or 0) * (1 + Effect(companion, "xp"))) end
+
+-- What a companion would be after so much experience: its level, its experience in that level (the cap kept).
+function ns.LevelAfter(companion, amount)
+	local level, xp = companion.level, (companion.xp or 0) + Learned(companion, amount)
+	while level < ns.LevelCap() and xp >= ns.XPNeed(level) do
+		xp = xp - ns.XPNeed(level)
+		level = level + 1
 	end
+	return level, xp
+end
+
+-- Experience gained, the levels it makes (kept in their journey and the week's goals); what it brought, given back.
+local function GainXP(companion, amount)
+	if companion.level >= ns.LevelCap() then return 0 end
+	local before = companion.level
+	companion.level, companion.xp = ns.LevelAfter(companion, amount)
+	if companion.level > before then
+		companion.record = companion.record or {}
+		companion.record.levels = (companion.record.levels or 0) + companion.level - before
+		ns.WeekAdd("levels", companion.level - before)
+	end
+	return Learned(companion, amount)
 end
 
 -- (a save made before the gentler levels: its companions' experience counted again, once)
-function Relevel()
+local function Relevel()
 	local s = ns.State()
 	if s.levelCurve == 2 then return end
 	s.levelCurve = 2
-	for _, companion in ipairs(s.companions or {}) do GainXP(companion, 0) end
+	for _, companion in ipairs(s.companions or {}) do companion.level, companion.xp = ns.LevelAfter(companion, 0) end
 end
 
-local function UsedNames()
+-- The names taken: by the camp, by the candidates around the fire.
+function ns.UsedNames()
 	local used = {}
-	for _, companion in ipairs(ns.State().companions) do used[companion.name] = true end
+	for _, list in ipairs({ ns.State().companions, ns.State().candidates or {} }) do
+		for _, companion in ipairs(list) do used[companion.name] = true end
+	end
 	return used
 end
+local UsedNames = ns.UsedNames
 
-local function NewCompanion(level)
-	local used = UsedNames()
+-- (used: names already drawn, those of the camp by default; sex: 0 or 1, else drawn)
+local function NewCompanion(level, rarity, used, sex)
+	used = used or UsedNames()
+	sex = sex or math.random(0, 1)
+	local pool = sex == 1 and ns.NAMES_FEMALE or ns.NAMES_MALE
 	local names = {}
-	for _, name in ipairs(ns.NAMES) do if not used[name] then names[#names + 1] = name end end
-	local class = Pick(ns.CLASSES)
-	return { name = Pick(#names > 0 and names or ns.NAMES), class = class.file, role = Pick(class.roles),
-		trait = Pick(ns.TRAIT_KEYS), level = max(1, level), xp = 0 }
+	for _, name in ipairs(pool) do if not used[name] then names[#names + 1] = name end end
+	local classes = {}
+	for _, class in ipairs(ns.CLASSES) do if ns.OfFaction(class.file) then classes[#classes + 1] = class end end
+	local class = Pick(classes[1] and classes or ns.CLASSES)
+	local companion = { name = Pick(#names > 0 and names or pool), sex = sex, class = class.file, role = Pick(class.roles),
+		trait = Pick(ns.TRAIT_KEYS), level = max(1, level), xp = 0, rarity = rarity or ns.RollRarity() }
+	used[companion.name] = true
+	return ns.Outfit(companion)
 end
+ns.NewRecruit = NewCompanion
 
 local function Join(companion)
 	local s = ns.State()
 	companion.id = s.nextId
 	s.nextId = s.nextId + 1
+	ns.Outfit(companion)
+	companion.record.since = companion.record.since or Now()
 	s.companions[#s.companions + 1] = companion
 	return companion
 end
 
--- The candidates around the fire: three, new ones every few hours.
+-- The candidates around the fire: three every few hours, the one you keep among them (and a contract's
+-- recruits, until recruited).
 function ns.Candidates()
 	local s = ns.State()
 	if not s.candidates or Now() - (s.candidatesAt or 0) >= ns.CANDIDATES_EVERY then
 		local top = max(1, min(ns.PlayerLevel(), s.tier * 10))
-		s.candidates = {}
-		for index = 1, 3 do
-			s.candidates[index] = NewCompanion(math.random(max(1, floor(top * 0.3)), max(1, floor(top * 0.6))))
+		-- (a contract's recruit stays, the one you keep too)
+		local kept, used, mine = {}, UsedNames(), 0
+		for _, candidate in ipairs(s.candidates or {}) do
+			if candidate.kept or candidate.held then kept[#kept + 1] = candidate end
+			if candidate.held and not candidate.kept then mine = mine + 1 end
+		end
+		s.candidates = kept
+		for _ = 1, 3 - mine do
+			s.candidates[#s.candidates + 1] = NewCompanion(math.random(max(1, floor(top * 0.3)), max(1, floor(top * 0.6))), nil, used)
 		end
 		s.candidatesAt = Now()
+	end
+	for _, candidate in ipairs(s.candidates) do
+		if not (candidate.items and candidate.abilities) then ns.Outfit(candidate) end
 	end
 	return s.candidates
 end
@@ -514,14 +572,25 @@ function ns.CanRecruit()
 	return true
 end
 
-function ns.Recruit(index)
+-- (the candidate itself: a new draw since it was shown takes no stranger)
+function ns.Recruit(candidate)
 	local s = ns.State()
-	local candidate = ns.Candidates()[index]
-	if not candidate or not ns.CanRecruit() then return false end
+	local index
+	for at, each in ipairs(ns.Candidates()) do if each == candidate then index = at end end
+	if not index or not ns.CanRecruit() then return false end
 	s.renown = s.renown - ns.RecruitCost()
 	table.remove(s.candidates, index)
+	candidate.kept, candidate.held = nil, nil
 	Join(candidate)
 	return candidate
+end
+
+-- A candidate kept through the next draws (one at most: keeping another lets the first go), or let go.
+function ns.HoldCandidate(candidate)
+	local on = not candidate.held
+	for _, each in ipairs(ns.State().candidates or {}) do each.held = nil end
+	candidate.held = on or nil
+	return on
 end
 
 function ns.Dismiss(id)
@@ -529,6 +598,10 @@ function ns.Dismiss(id)
 	for index, companion in ipairs(s.companions) do
 		if companion.id == id and not ns.Busy(companion) and not companion.champion then
 			table.remove(s.companions, index)
+			for key in pairs(s.bonds) do
+				local a, b = key:match("^(%d+):(%d+)$")
+				if tonumber(a) == id or tonumber(b) == id then s.bonds[key] = nil end
+			end
 			return true
 		end
 	end
@@ -557,7 +630,6 @@ function ns.NextTier() return ns.TierAt(ns.State().tier + 1) end
 
 function ns.CanRaise()
 	local s, nextTier = ns.State(), ns.NextTier()
-	if not nextTier then return false, "top" end
 	if ns.PlayerLevel() < nextTier.level then return false, "level" end
 	if s.renown < nextTier.renown then return false, "renown" end
 	if s.embers < nextTier.embers then return false, "embers" end
@@ -656,17 +728,40 @@ local function Difficulty(place)
 	return place.high
 end
 
+-- A party's strength: its mean, or 90 % of its strongest when that one could carry the others; and who leads.
+function ns.PartyPower(place, minutes, members)
+	local total, best, leader = 0, 0, nil
+	for _, companion in ipairs(members) do
+		local power = ns.Power(companion, place, minutes)
+		total = total + power
+		if power > best then best, leader = power, companion end
+	end
+	local mean = total / max(1, #members)
+	if #members > 1 and best * ns.CARRY > mean then return best * ns.CARRY, leader end
+	return mean, nil
+end
+
+-- The experience an expedition brings a companion (before its trait): the minutes away, the place's level and
+-- kind, longer roads a little more; once won, more below the place, less above; lost, a share of it.
+function ns.ExpeditionXP(companion, place, minutes, members, won)
+	local base = minutes * (1 + minutes / ns.XP_LONG) * (ns.XP_PER_MINUTE + ns.XP_PLACE * Difficulty(place))
+		* (ns.XP_KIND[place.kind] or 1)
+	local gap = Difficulty(place) - companion.level
+	local scale = gap > 0 and min(ns.XP_BELOW_MAX, 1 + ns.XP_BELOW * gap) or max(ns.XP_ABOVE_MIN, 1 + ns.XP_ABOVE * gap)
+	if won == false then scale = min(1, scale) * ns.XP_LOST end
+	return base * scale * (1 + min(0.6, PartyEffect(members, "partyXp"))) * (1 + ns.Rarity(companion).xp)
+end
+
 -- An expedition's odds (0.05 to 0.95), as said before it leaves.
 function ns.Chance(place, minutes, members)
 	local count = #members
 	if count == 0 then return 0 end
-	local total, tank, heal = 0, false, false
+	local chance = 0.45 + (ns.PartyPower(place, minutes, members) - Difficulty(place)) * 0.04 + (count - 1) * 0.04
+	local tank, heal = false, false
 	for _, companion in ipairs(members) do
-		total = total + ns.Power(companion, place, minutes)
 		if companion.role == "tank" then tank = true end
 		if companion.role == "heal" then heal = true end
 	end
-	local chance = 0.45 + (total / count - Difficulty(place)) * 0.04 + (count - 1) * 0.04
 	if place.kind == "zone" then
 		chance = chance + (tank and 0.05 or 0) + (heal and 0.05 or 0)
 	else
@@ -675,7 +770,7 @@ function ns.Chance(place, minutes, members)
 	local steps = 0
 	for index, length in ipairs(ns.DURATIONS[place.kind]) do if length == minutes then steps = index - 1 end end
 	chance = chance - 0.04 * steps + 0.03 * ns.Level("apothecary") + ns.ProfessionBonus("success")
-		+ PartyEffect(members, "success") + ns.BondBonus(members)
+		+ PartyEffect(members, "success") + ns.BondBonus(members) + ns.ThreatBonus(place, members)
 	return max(0.05, min(0.95, chance))
 end
 
@@ -684,7 +779,7 @@ function ns.Provisions(place, minutes, members)
 	for _, companion in ipairs(members) do frugal = frugal + Effect(companion, "provisions") end
 	local per = place.kind == "raid" and 24 or 12
 	-- (never more than a full larder: the longest expedition can always leave once it is full)
-	return min(ns.Rates().provisionsCap, ceil(#members * minutes / per * (1 - frugal / max(1, #members))))
+	return min(ns.ProvisionsCap(), ceil(#members * minutes / per * (1 - frugal / max(1, #members))))
 end
 
 function ns.Length(minutes, members)
@@ -693,11 +788,7 @@ function ns.Length(minutes, members)
 	return floor(minutes * 60 * (1 - swift - ns.ProfessionBonus("duration")))
 end
 
-function ns.Running()
-	local running = 0
-	for _ in pairs(ns.State().expeditions) do running = running + 1 end
-	return running
-end
+function ns.Running() return #ns.State().expeditions end
 
 -- Whether it can leave, and why not.
 function ns.CanStart(place, minutes, members)
@@ -713,17 +804,23 @@ function ns.CanStart(place, minutes, members)
 	return true
 end
 
-function ns.Start(place, minutes, members)
+-- (a contract: its road taken from the board, its reward carried along; again: a standing order, it sets out
+-- again on each return; at: when it leaves, now unless said)
+function ns.Start(place, minutes, members, contract, again, at)
 	if not ns.CanStart(place, minutes, members) then return false end
 	local s = ns.State()
+	at = at or Now()
 	local ids = {}
 	for index, companion in ipairs(members) do ids[index] = companion.id end
 	local expedition = { id = s.nextId, kind = place.kind, area = place.area, low = place.low, high = place.high,
-		minutes = minutes, members = ids, start = Now(), finish = Now() + ns.Length(minutes, members),
-		chance = ns.Chance(place, minutes, members) }
+		minutes = minutes, members = ids, start = at, finish = at + ns.Length(minutes, members),
+		chance = ns.Chance(place, minutes, members), again = (again and not contract) or nil }
+	-- (left with the camp rested, after your return: rested when back, though another absence came between)
+	expedition.rests = ns.Rest() > 0 and at >= (s.restFrom or math.huge)
 	s.nextId = s.nextId + 1
 	s.provisions = s.provisions - ns.Provisions(place, minutes, members)
 	for _, companion in ipairs(members) do companion.busy = expedition.id end
+	if contract and ns.DropContract(contract) then expedition.contract = contract.reward end
 	s.expeditions[#s.expeditions + 1] = expedition
 	ns.Schedule()
 	return expedition
@@ -734,7 +831,7 @@ function ns.Rewards(place, minutes, members)
 	local hours = minutes / 60
 	local base = Difficulty(place) * hours ^ 0.85 * ns.REWARD_SCALE[place.kind]
 	local s = ns.State()
-	local bonus = 1 + 0.08 * ns.Level("watch") + ns.ProfessionBonus("rewards") + ns.TROPHY_BONUS * floor(ns.TrophyCount() / 10)
+	local bonus = 1 + 0.08 * ns.Level("watch") + ns.ProfessionBonus("rewards") + ns.TrophyBonus()
 		+ ns.PRESTIGE_BONUS * s.prestige + ((s.lived[place.area] or 0) > 0 and ns.LIVED_BONUS or 0)
 	for _, companion in ipairs(members) do bonus = bonus + Effect(companion, "rewards") / max(1, #members) end
 	return { renown = floor(base * (0.5 + 0.25 * #members) * bonus * ns.RENOWN_SCALE),
@@ -743,18 +840,53 @@ function ns.Rewards(place, minutes, members)
 			* (0.75 + 0.25 * #members) * bonus)) }
 end
 
-local function FindTrophy(area, hours, members)
+-- A place's next trophy, given (the most precious first, each when chance(index) says so; nil: at once);
+-- nil when none is.
+function ns.GiveTrophy(area, chance)
 	local s = ns.State()
 	s.trophies[area] = s.trophies[area] or {}
-	local found = s.trophies[area]
-	local luck = 1 + ns.ProfessionBonus("trophy") + 0.1 * ns.Level("watch")
-	for _, companion in ipairs(members) do luck = luck + Trait(companion, "trophy") end
 	for index = 3, 1, -1 do
-		if not found[index] and math.random() < ns.TROPHY_CHANCES[index] * hours ^ 0.5 * luck then
-			found[index] = true
+		if not s.trophies[area][index] and (not chance or math.random() < chance(index)) then
+			s.trophies[area][index] = true
 			return index
 		end
 	end
+end
+
+-- A trophy found on the road: the longer and the luckier, the likelier.
+local function FindTrophy(area, hours, members)
+	local luck = 1 + ns.ProfessionBonus("trophy") + 0.1 * ns.Level("watch")
+	for _, companion in ipairs(members) do luck = luck + Effect(companion, "trophy") end
+	return ns.GiveTrophy(area, function(index) return ns.TROPHY_CHANCES[index] * hours ^ 0.5 * luck end)
+end
+
+-- Why a road was lost, in a few words' keys: no tank or no healer where a party needs them, weaker than the
+-- place, threats left open; else the odds (against them, or ill luck when they were for them).
+local function LostWhy(place, minutes, members, open, chance)
+	local why, tank, heal = {}, false, false
+	for _, companion in ipairs(members) do
+		if companion.role == "tank" then tank = true end
+		if companion.role == "heal" then heal = true end
+	end
+	if place.kind ~= "zone" and not tank then why[#why + 1] = "tank" end
+	if place.kind ~= "zone" and not heal then why[#why + 1] = "heal" end
+	if ns.PartyPower(place, minutes, members) < Difficulty(place) then why[#why + 1] = "weak" end
+	if open > 0 then why[#why + 1] = "open" end
+	if not why[1] then why[1] = (chance or 0.5) >= 0.5 and "luck" or "odds" end
+	return why
+end
+
+-- The threats met on the road, for the report: each one, and who countered it with what (names kept: the
+-- companion may part with the camp later).
+local function ThreatStory(place, members)
+	local covered, _, open = ns.Coverage(place, members)
+	local story = {}
+	for _, threat in ipairs(ns.Threats(place)) do
+		local by = covered[threat]
+		story[#story + 1] = { key = threat, by = by and by.companion.name or nil, class = by and by.companion.class or nil,
+			spell = by and by.ability.spell or nil }
+	end
+	return story, open
 end
 
 local function Resolve(expedition)
@@ -765,39 +897,75 @@ local function Resolve(expedition)
 		if companion then members[#members + 1] = companion end
 	end
 	local place = { kind = expedition.kind, area = expedition.area, low = expedition.low, high = expedition.high }
-	local won = math.random() < expedition.chance
-	local told = { kind = expedition.kind, area = expedition.area, won = won, at = expedition.finish, hurt = {} }
+	local won = math.random() < (expedition.chance or 0.5) -- (a save of an older version: an even chance)
+	-- (its tale, for the report shown when you come back: who went and what they became, what they found)
+	local told = { kind = expedition.kind, area = expedition.area, won = won,
+		at = expedition.finish, hurt = {}, minutes = expedition.minutes, chance = expedition.chance, party = {}, fresh = true }
+	local open
+	told.threats, open = ThreatStory(place, members)
+	if not won then told.why = LostWhy(place, expedition.minutes, members, open, expedition.chance) end
+	-- (the camp rested: a road left since you came back teaches more, for the minutes of rest it spends)
+	local rested = 1
+	-- (a road of an older version: told by its start)
+	local rests = expedition.rests
+	if rests == nil then rests = (expedition.start or 0) >= (s.restFrom or math.huge) end
+	if (tonumber(s.rest) or 0) > 0 and rests then
+		local spent = min(s.rest, expedition.minutes)
+		rested = 1 + ns.REST_XP * spent / max(1, expedition.minutes)
+		s.rest = s.rest - spent
+		told.rested = true
+	end
 	local rewards = ns.Rewards(place, expedition.minutes, members)
 	local share = won and 1 or 0.2
-	told.renown, told.embers = floor(rewards.renown * share), won and rewards.embers or 0
+	told.renown = floor(rewards.renown * share)
 	s.renown = s.renown + told.renown
-	Earn(told.embers)
+	told.embers = Earn(won and rewards.embers or 0)
 	-- Supplies: always when won, a share of them when lost.
 	local supplies = won and rewards.supplies or floor(rewards.supplies * ns.SUPPLIES_LOST)
 	if supplies > 0 then
 		told.supplies = supplies
 		s.supplies = s.supplies + supplies
 	end
-	if won then told.trophy = FindTrophy(expedition.area, expedition.minutes / 60, members) end
-	local xp = expedition.minutes * 1.5 * ns.REWARD_SCALE[place.kind] * (won and 1 or 0.4)
+	if won then
+		told.trophy = FindTrophy(expedition.area, expedition.minutes / 60, members)
+		told.gear = ns.FindGear(place, expedition.minutes, members)
+		if expedition.contract then ns.ContractReward(expedition.contract, place, expedition.minutes, members, told) end
+		if told.trophy then ns.WeekAdd("trophies") end
+	end
+	told.contract = expedition.contract
+	local boost = (won and expedition.contract == "xp") and 2 or 1
 	local heal = 1 - 0.15 * ns.Level("apothecary") - ns.ProfessionBonus("injury") - min(0.6, PartyEffect(members, "partyInjury"))
-	local learn = 1 + min(0.6, PartyEffect(members, "partyXp"))
 	for _, companion in ipairs(members) do
 		companion.busy = nil
-		local before = companion.level
-		GainXP(companion, xp * learn * (Difficulty(place) / max(1, companion.level)) ^ 0.5)
-		if companion.level > before then told.up = (told.up or 0) + 1 end
+		local before, was = companion.level, (companion.xp or 0) / max(1, ns.XPNeed(companion.level))
+		local gained = GainXP(companion, ns.ExpeditionXP(companion, place, expedition.minutes, members, won) * boost * rested)
+		if companion.level > before then told.up = (told.up or 0) + companion.level - before end
+		local hurt = false
 		if not won and math.random() < 0.5 then
-			local minutes = max(30, expedition.minutes * 0.5) * max(0.1, heal) * (1 - Trait(companion, "injury"))
+			local minutes = max(30, expedition.minutes * 0.5) * max(0.1, heal) * (1 - Effect(companion, "injury"))
 			companion.hurt = expedition.finish + floor(minutes * 60)
 			told.hurt[#told.hurt + 1] = companion.name
+			hurt = true
 		end
+		companion.record = companion.record or {}
+		local record = companion.record
+		record.expeditions = (record.expeditions or 0) + 1
+		if won then record.won = (record.won or 0) + 1 end
+		told.party[#told.party + 1] = { id = companion.id, name = companion.name, class = companion.class, look = companion.look, rarity = companion.rarity,
+			from = before, to = companion.level, share = was, after = (companion.xp or 0) / max(1, ns.XPNeed(companion.level)),
+			xp = gained, hurt = hurt or nil, top = companion.level >= ns.LevelCap() or nil }
 	end
 	s.stats.expeditions = s.stats.expeditions + 1
 	if won then
 		s.stats.won = s.stats.won + 1
-		if place.kind == "dungeon" then s.stats.dungeons = s.stats.dungeons + 1 end
-		if place.kind == "raid" then s.stats.raids = s.stats.raids + 1 end
+		ns.WeekAdd("won")
+		if place.kind == "dungeon" then
+			s.stats.dungeons = s.stats.dungeons + 1
+			ns.WeekAdd("dungeons")
+		elseif place.kind == "raid" then
+			s.stats.raids = s.stats.raids + 1
+			ns.WeekAdd("raids")
+		end
 	end
 	for i = 1, #members do
 		for j = i + 1, #members do
@@ -808,6 +976,7 @@ local function Resolve(expedition)
 	-- (now and then, a choice the road brings back with it)
 	if not s.event and math.random() < ns.ROAD_CHANCE then
 		s.event, s.eventArea = Pick(ns.ROAD_EVENTS).key, expedition.area
+		told.road = true
 	end
 	table.insert(s.log, 1, told)
 	while #s.log > ns.LOG_KEPT do table.remove(s.log) end
@@ -815,19 +984,87 @@ local function Resolve(expedition)
 end
 
 -- The expeditions back: resolved, in the order they came back.
-local function Returns(now)
+-- A standing order: the same party on the same road again as soon as it is back (leaving at its return), while
+-- the fire still burns after your last look (seen) or as it happens, everyone unhurt, the place open, provisions
+-- enough. Its tale says whether it left, or why the order ended (then it is over: set it again from the road).
+local function SetOutAgain(expedition, told, seen, now)
+	local at = expedition.finish
+	if at > seen + ns.Offline() and at < now - 60 then told.again = "away" return end
+	local members = {}
+	for _, id in ipairs(expedition.members) do
+		local companion = ns.Companion(id)
+		if not companion then told.again = "busy" return end
+		if (companion.hurt or 0) > at then told.again = "hurt" return end
+		members[#members + 1] = companion
+	end
+	local place = ns.Place(expedition.kind, expedition.area)
+	if not place then told.again = "closed" return end
+	local can, why = ns.CanStart(place, expedition.minutes, members)
+	if not can then told.again = why or "closed" return end
+	told.again = ns.Start(place, expedition.minutes, members, nil, true, at) and "left" or "closed"
+end
+
+-- The expeditions back: resolved in the order they came back (a standing order's next road among them, when it
+-- is back already too).
+local function Returns(now, seen)
 	local s = ns.State()
 	local back = {}
-	table.sort(s.expeditions, function(a, b) return a.finish < b.finish end)
-	local index = 1
-	while s.expeditions[index] do
-		if s.expeditions[index].finish <= now then
-			back[#back + 1] = Resolve(table.remove(s.expeditions, index))
-		else
-			index = index + 1
+	for _ = 1, ns.AGAIN_MAX do
+		local soonest
+		for index, expedition in ipairs(s.expeditions) do
+			if expedition.finish <= now and (not soonest or expedition.finish < s.expeditions[soonest].finish) then soonest = index end
 		end
+		if not soonest then break end
+		local expedition = table.remove(s.expeditions, soonest)
+		local told = Resolve(expedition)
+		back[#back + 1] = told
+		if expedition.again then SetOutAgain(expedition, told, seen, now) end
 	end
 	return back
+end
+
+-- A standing order set or ended on an expedition on the road.
+function ns.SetAgain(expedition, on)
+	if expedition.contract then return false end
+	expedition.again = on and true or nil
+	return true
+end
+
+-- The reports not read yet (the tales of the expeditions back), the oldest first; one read.
+function ns.Reports()
+	local list = {}
+	for _, told in ipairs(ns.State().log) do
+		if told.fresh then table.insert(list, 1, told) end
+	end
+	return list
+end
+function ns.ReportRead(told) told.fresh = nil end
+function ns.ReportsRead() for _, told in ipairs(ns.State().log) do told.fresh = nil end end
+
+-- The same road again: the same place, length and party, when all of them are free and it can leave.
+function ns.AgainOf(told)
+	if not (told and told.party and told.party[1] and told.minutes) then return nil end
+	local place = ns.Place(told.kind, told.area)
+	if not place then return nil end
+	local members = {}
+	for _, gone in ipairs(told.party) do
+		local companion = ns.Companion(gone.id)
+		if not companion then return place end
+		members[#members + 1] = companion
+	end
+	return place, told.minutes, members
+end
+-- (a place closed since; one of them parted with since: not all free)
+function ns.CanAgain(told)
+	local place, minutes, members = ns.AgainOf(told)
+	if not place then return false, "closed" end
+	if not members then return false, "busy" end
+	return ns.CanStart(place, minutes, members)
+end
+-- (again: a standing order with it, the road taken again on each return)
+function ns.Again(told, again)
+	local place, minutes, members = ns.AgainOf(told)
+	return members and ns.Start(place, minutes, members, nil, again) or false
 end
 
 -- The quartermaster's orders -----------------------------------------------------------------------------
@@ -917,6 +1154,7 @@ function ns.Honor(order)
 	order.done = Now()
 	s.supplies, s.renown = s.supplies + order.supplies, s.renown + order.renown
 	s.stats.orders = s.stats.orders + 1
+	ns.WeekAdd("orders")
 	return true
 end
 
@@ -955,6 +1193,8 @@ function ns.CanAnswer(choice)
 			if s[key] < -amount then return false end
 		end
 	end
+	-- (someone joins: only with room by the fire)
+	if effect.recruit and Count() >= ns.MaxCompanions() then return false end
 	return true
 end
 
@@ -968,27 +1208,39 @@ function ns.Answer(choice)
 	for _, key in ipairs({ "embers", "provisions", "renown", "supplies" }) do
 		if effect[key] then
 			local amount = key == "embers" and floor(effect[key] * EmberScale()) or effect[key]
-			if key == "embers" and amount > 0 then Earn(amount) else s[key] = max(0, s[key] + amount) end
+			if key == "embers" and amount > 0 then amount = Earn(amount) else s[key] = max(0, s[key] + amount) end
 			told[key] = amount
 		end
 	end
 	local companion = AnyCompanion(true)
-	if effect.xp and companion then GainXP(companion, effect.xp) told.who = companion.name end
+	if effect.xp and companion and GainXP(companion, effect.xp) > 0 then told.who = companion.name end
 	if effect.next then s.nextEvent = effect.next end
-	if effect.xpAll then for _, each in ipairs(s.companions) do GainXP(each, effect.xpAll) end end
+	if effect.xpAll then
+		for _, each in ipairs(s.companions) do GainXP(each, effect.xpAll) end
+		told.xpAll = true
+	end
 	if effect.injury and companion and math.random() < 0.5 then
 		companion.hurt = Now() + HOUR
 		told.hurt = companion.name
 	end
 	if effect.heal then for _, each in ipairs(s.companions) do each.hurt = nil end told.healed = true end
 	if effect.recruit and Count() < ns.MaxCompanions() then
-		local joined = Join(NewCompanion(max(1, floor(ns.PlayerLevel() * 0.4))))
+		local joined = Join(NewCompanion(max(1, floor(ns.PlayerLevel() * 0.4)), nil, nil, effect.sex))
 		told.joined = joined.name
 	end
 	if effect.trophy and math.random() < effect.trophy then
-		local zone = Pick(ns.ZONES)
-		local found = FindTrophy(zone.area, 100, {})
-		if found then told.trophy, told.area = found, zone.area end
+		-- (a zone with a trophy still to find)
+		local zones = {}
+		for _, zone in ipairs(ns.ZONES) do
+			local found = s.trophies[zone.area] or {}
+			if not (found[1] and found[2] and found[3]) then zones[#zones + 1] = zone end
+		end
+		local zone = zones[1] and Pick(zones)
+		local found = zone and ns.GiveTrophy(zone.area)
+		if found then
+			told.trophy, told.area = found, zone.area
+			ns.WeekAdd("trophies")
+		end
 	end
 	s.lastEvent, s.event, s.eventAt, s.eventArea = s.event, nil, Now(), nil
 	return told
@@ -1000,14 +1252,13 @@ end
 function ns.Real(kind, value)
 	local s = ns.State()
 	if not s.lit then return end
-	local rates = ns.Rates()
 	if kind == "quest" then
 		s.renown = s.renown + ns.REAL.questRenown
 		Earn(floor(50 + ns.PerSecond(true) * ns.QUEST_SHARE))
 	elseif kind == "fish" then
-		Stock(ns.REAL.fishProvisions * (value or 1), rates.provisionsCap)
+		Stock(ns.REAL.fishProvisions * (value or 1), ns.ProvisionsCap())
 	elseif kind == "cook" then
-		Stock(ns.REAL.cookProvisions, rates.provisionsCap)
+		Stock(ns.REAL.cookProvisions, ns.ProvisionsCap())
 	elseif kind == "boss" then
 		local here = U.PlainName(value)
 		for _, list in ipairs({ ns.DUNGEONS, ns.RAIDS }) do
@@ -1093,8 +1344,8 @@ function ns.Kindle()
 	if not s.choosing then return false end
 	s.choosing = nil
 	local kindling = ns.AshLevel("kindling")
-	for key, count in pairs(ns.KINDLING) do
-		if kindling > 0 then s.gens[key] = (s.gens[key] or 0) + count * kindling end
+	if kindling > 0 then
+		for key, count in pairs(ns.KINDLING) do s.gens[key] = (s.gens[key] or 0) + count * kindling end
 	end
 	Forget()
 	return true
@@ -1136,10 +1387,10 @@ end
 function ns.Light()
 	local s = ns.State()
 	if s.lit then return nil end
+	ns.NoteVisit()
 	local heritage = ns.Heritage()
 	s.lit, s.last, s.eventAt = Now(), Now(), Now()
-	local rates = ns.Rates()
-	s.embers = min(rates.embersCap, heritage.embers)
+	s.embers = heritage.embers
 	s.provisions = 30 + heritage.provisions -- (all of it, as said: above the cap until spent)
 	s.renown, s.supplies = heritage.renown, heritage.supplies
 	-- Two to start, and the veteran.
@@ -1156,9 +1407,10 @@ end
 
 local AWAY = 30 * 60
 
+-- (the levels the companions gained, not those a newcomer brings)
 local function Levels()
 	local total = 0
-	for _, companion in ipairs(ns.State().companions) do total = total + (companion.level or 1) end
+	for _, companion in ipairs(ns.State().companions) do total = total + ((companion.record or {}).levels or 0) end
 	return total
 end
 
@@ -1170,7 +1422,8 @@ function ns.Snapshot()
 end
 
 -- What changed since you last saw the camp: { away (seconds), embers, provisions, renown, supplies, back, won,
--- trophies, levels }, or nil (not away long enough, nothing new, or the fire never seen). Said once.
+-- trophies, levels }, or nil (not away long enough, or the fire never seen); nothing new: { away, nothing = true }.
+-- Said once.
 function ns.WhileAway()
 	local s = ns.State()
 	local seen = s.seen
@@ -1185,11 +1438,17 @@ function ns.WhileAway()
 	recap.won = max(0, s.stats.won - (seen.won or 0))
 	recap.trophies = max(0, ns.TrophyCount() - (seen.trophies or 0))
 	recap.levels = max(0, Levels() - (seen.levels or 0))
+	-- (the camp rested meanwhile: said once, with the minutes of roads it makes richer)
+	if s.restNew then
+		recap.rest = (tonumber(s.rest) or 0) > 0 and s.rest or 0
+		s.restNew = nil
+	end
 	ns.Snapshot()
-	for _, key in ipairs({ "embers", "provisions", "renown", "supplies", "back", "trophies", "levels" }) do
+	for _, key in ipairs({ "embers", "provisions", "renown", "supplies", "back", "trophies", "levels", "rest" }) do
+		recap[key] = recap[key] or 0
 		if recap[key] > 0 then return recap end
 	end
-	return nil
+	return { away = away, nothing = true }
 end
 
 -- One look at the camp ------------------------------------------------------------------------------------
@@ -1207,13 +1466,24 @@ function ns.Update()
 	local s = ns.State()
 	if not s.lit then return {} end
 	local now = Now()
-	ns.NoteVisit()
+	Relevel()
+	-- (the companions of an older camp: given a face, a race and gear, once)
+	for _, companion in ipairs(s.companions) do
+		if not (companion.items and companion.race and companion.record and companion.abilities) then
+			ns.Outfit(companion)
+			companion.record.since = companion.record.since or s.lit
+		end
+	end
+	local seen = s.last or now -- (the last look, before this one)
 	Produce(now)
-	local back = Returns(now)
+	local back = Returns(now, seen)
 	for _, companion in ipairs(s.companions) do
 		if companion.hurt and companion.hurt <= now then companion.hurt = nil end
 	end
 	Champions()
+	-- (the board and the week, renewed when their time comes)
+	ns.Contracts()
+	ns.Week()
 	Feats()
 	Events(now)
 	-- (the orders looked at twice a minute at most: their goods are read from a long list)
@@ -1230,28 +1500,49 @@ end
 -- can honor.
 function ns.Attention()
 	if not ns.Lit() then return false end
-	local s, now = ns.State(), Now()
+	local s = ns.State()
 	if s.choosing then return true end
 	if s.unseen or s.event then return true end
-	for _, expedition in ipairs(s.expeditions) do if expedition.finish <= now then return true end end
-	for _, companion in ipairs(s.companions) do if ns.TalentDue(companion) then return true end end
-	if ns.CanRaise() and s.raiseSeen ~= s.tier then return true end
-	for _, order in ipairs(s.orders) do if ns.CanHonor(order) then return true end end
+	if ns.WeekReady() then return true end
+	if ns.BackWaiting() or ns.TalentWaiting() or ns.OrderReady() then return true end
+	return ns.CanRaise() and s.raiseSeen ~= s.tier or false
+end
+
+-- What waits: an expedition back, a talent to choose, an order your bags can honor.
+function ns.BackWaiting()
+	for _, expedition in ipairs(ns.State().expeditions) do if expedition.finish <= Now() then return true end end
+	return false
+end
+function ns.TalentWaiting()
+	for _, companion in ipairs(ns.State().companions) do if ns.TalentDue(companion) then return true end end
+	return false
+end
+function ns.OrderReady()
+	for _, order in ipairs(ns.State().orders) do if ns.CanHonor(order) then return true end end
 	return false
 end
 
 -- The next expedition back: one timer, its notice.
 local token = 0
+local scheduledFor, scheduledTimer, scheduledPending
 function ns.Schedule()
-	token = token + 1
-	local mine, soonest = token, nil
+	local soonest
 	for _, expedition in ipairs(ns.State().expeditions) do
 		if not soonest or expedition.finish < soonest then soonest = expedition.finish end
 	end
+	if soonest == scheduledFor and scheduledPending then return end
+	if scheduledTimer and scheduledTimer.Cancel then scheduledTimer:Cancel() end
+	scheduledFor, scheduledTimer, scheduledPending = soonest, nil, false
 	if not soonest then return end
-	C_Timer.After(max(1, soonest - Now() + 1), function()
+	token = token + 1
+	local mine = token
+	scheduledPending = true
+	local function Fire()
 		if mine ~= token then return end
+		scheduledFor, scheduledTimer, scheduledPending = nil, nil, false
 		local back = ns.Update()
 		if ns.Back then ns.Back(back) end
-	end)
+	end
+	local delay = max(1, soonest - Now() + 1)
+	if C_Timer.NewTimer then scheduledTimer = C_Timer.NewTimer(delay, Fire) else C_Timer.After(delay, Fire) end
 end

@@ -6,7 +6,7 @@ local L = ns.L
 -- companions, the expeditions, the rest). A page opened from another (a companion, an expedition, the
 -- road...) takes the window's place with its way back, as a menu would. Before the fire is lit, an invitation
 -- to light it, then what your journey brings. While it is shown the camp is looked at every few seconds;
--- closed, nothing runs. And the notices of the expeditions back (an option, on).
+-- closed, only the timer of the next expedition back runs. And the notices of the expeditions back (an option, on).
 
 local W = Wanderer
 local U = W and W.Util
@@ -15,6 +15,9 @@ local Skin = W and W.Skin
 local WIDTH, HEIGHT = 420, 720
 local HEAD, STRIP, TABS = 50, 38, 56 -- the heading, the resources' strip, the tabs
 local LOOK_EVERY = 5 -- seconds between two looks while the window is shown
+local RAIL = Skin.SCROLL_WIDTH + 2 -- a list's scroll bar's room
+local ROW = 54 -- a row's height
+local GOLD = Skin.COLORS.gold
 local RESOURCES = {
 	{ key = "embers", icon = "Interface\\Icons\\Spell_Fire_Incinerate" },
 	{ key = "provisions", icon = "Interface\\Icons\\INV_Misc_Food_15" },
@@ -23,28 +26,33 @@ local RESOURCES = {
 }
 local ICONS = { ashes = "Interface\\Icons\\INV_Misc_Powder_Black" }
 for _, resource in ipairs(RESOURCES) do ICONS[resource.key] = resource.icon end
-ns.ICONS = ICONS
+function ns.IconFile(key) return ICONS[key] end
 
--- A resource's icon within a text (its edges cut away), and amounts said with their icons: "[icon] 12,4 k".
-function ns.Icon(key, size)
+-- An icon within a text (its edges cut away); a resource's; amounts said with their icons: "[icon] 12,4 k".
+function ns.InlineIcon(file, size)
 	size = size or 14
-	return "|T" .. ICONS[key] .. ":" .. size .. ":" .. size .. ":0:0:64:64:5:59:5:59|t"
+	return "|T" .. file .. ":" .. size .. ":" .. size .. ":0:0:64:64:5:59:5:59|t"
 end
+function ns.Icon(key, size) return ns.InlineIcon(ICONS[key], size) end
 function ns.Amount(key, value, sign) return ns.Icon(key) .. " " .. (sign or "") .. ns.Short(value) end
 function ns.Gains(gains, sign)
 	local parts = {}
-	for _, key in ipairs({ "embers", "provisions", "renown", "supplies", "ashes" }) do
+	for _, key in ipairs({ "embers", "provisions", "renown", "supplies" }) do
 		local value = gains[key]
 		if value and value ~= 0 then parts[#parts + 1] = ns.Amount(key, math.abs(value), sign and (value > 0 and "+" or "-") or nil) end
 	end
 	return table.concat(parts, "   ")
 end
 
-local window, light, away, current
+local window, light, current
+local names = CreateFrame("Frame") -- (the names and icons the game sends a moment later: the page drawn again)
+local asked -- (the last question of this window)
+
+-- A question of this window (the kit's), answered no when it closes.
+function ns.Ask(text, accept) asked = Skin.Ask(text, accept) end
 local pages, order = {}, {} -- every page by key; in the order they were added
 
 local function Settings() return W and W.Settings and W.Settings("campfire") or nil end
-local function Sound() if U.PlaySound then U.PlaySound("IG_MAINMENU_OPTION_CHECKBOX_ON") end end
 
 -- Numbers and times, said the same way everywhere.
 function ns.Number(value)
@@ -53,7 +61,7 @@ function ns.Number(value)
 	if value >= 1e9 then return ns.Short(value) end
 	return BreakUpLargeNumbers and BreakUpLargeNumbers(math.floor(value)) or tostring(math.floor(value))
 end
--- A number as a player reads it: "1 234", "12,4 k", "3,25 M"; small ones with a decimal ("0,1").
+-- A number as a player reads it: "1 234", "12,4 k", "3,25 M"; small ones with decimals ("0,25").
 local UNITS = { { 1e15, "NUMBER_Q" }, { 1e12, "NUMBER_T" }, { 1e9, "NUMBER_B" }, { 1e6, "NUMBER_M" }, { 1e4, "NUMBER_K", 1e3 } }
 local POINT = DECIMAL_SEPERATOR or "."
 function ns.Decimal(value, places)
@@ -94,7 +102,7 @@ function ns.Minutes(minutes)
 	if minutes < 60 then return L.MINUTES:format(minutes) end
 	return L.HOURS:format(math.floor(minutes / 60))
 end
-function ns.Left(seconds) return U.Ago(math.max(60, seconds)) end
+function ns.Left(seconds) return U.Ago(seconds) end
 
 -- A number in Roman figures (the levels of the eternal blaze, the living embers): II, III, IV...
 local ROMAN = { { 1000, "M" }, { 900, "CM" }, { 500, "D" }, { 400, "CD" }, { 100, "C" }, { 90, "XC" }, { 50, "L" }, { 40, "XL" },
@@ -120,20 +128,24 @@ end
 -- A list that scrolls (UI.List), drawn from the top down each time its page is drawn: list:Begin(), then
 -- its pieces (a caption, a text, a row, a frame of the page's own), list:Done(). Its scroll bar beside it,
 -- shown when there is more than it holds: the wheel, the thumb dragged or the rail clicked scroll it.
--- A row: spec { icon, quality, coords (a part of its texture), grey (its icon faded), shape (its icon dark: not known yet), title, color,
--- sub, wrap (its sub on several lines), right (a big number), chip, tone, bar (0 to 1), action = { text, fn,
--- enabled, tip }, onClick (a chevron: it opens something; plain: no chevron), tip (lines, the first in gold), dim, chosen }.
+-- A row: spec { icon, quality, grey (its icon faded), shape (its icon dark: not known yet), title, color,
+-- sub, wrap (its sub on several lines), height, chip, tone, bar (0 to 1), action = { text, fn, enabled, tip },
+-- onClick (a chevron: it opens something; plain: no chevron), onRight (a right click of its own, its "..." shown
+-- under the mouse), tip (lines, the first in gold), link (an item's tooltip), companion (their portrait instead
+-- of the icon), dim, chosen }.
 
 local UI = {}
 ns.UI = UI
 
 -- Movement, kept light: a tween runs fn(progress) from 0 to 1 over its seconds (eased), then done(); one
 -- frame drives them all, and only while one runs. A tween of the same key takes the place of the last.
-local tweens = {}
+local tweens, coming = {}, nil
 local animator = CreateFrame("Frame")
--- (a step that fails ends its tween, never the others; what ends is told once the round is over)
+-- (a step that fails ends its tween, never the others; what ends is told once the round is over; a tween
+-- begun during a round waits for the next one)
 local function Animate(_, elapsed)
 	local finished
+	coming = {}
 	for key, tween in pairs(tweens) do
 		tween.age = tween.age + elapsed
 		local t = math.min(1, tween.age / tween.duration)
@@ -144,13 +156,49 @@ local function Animate(_, elapsed)
 			finished[#finished + 1] = tween.done
 		end
 	end
+	local waiting = coming
+	coming = nil
+	for key, tween in pairs(waiting) do tweens[key] = tween or nil end
 	for _, done in ipairs(finished or {}) do pcall(done) end
 	if not next(tweens) then animator:SetScript("OnUpdate", nil) end
 end
 function UI.Tween(key, duration, fn, done)
-	tweens[key] = { age = 0, duration = duration, fn = fn, done = done }
-	if not pcall(fn, 0) then tweens[key] = nil return end
+	if not pcall(fn, 0) then return UI.Stop(key) end
+	local tween = { age = 0, duration = duration, fn = fn, done = done }
+	if coming then coming[key] = tween else tweens[key] = tween end
 	animator:SetScript("OnUpdate", Animate)
+end
+-- A tween ended where it is, its done() never told.
+function UI.Stop(key)
+	if coming then coming[key] = false end
+	tweens[key] = nil
+end
+
+-- A thin bar of how far along (Wanderer's line, in the fire's warm tone), across the foot of a frame (insets:
+-- left, right, bottom; none: placed by its owner): bar:Set(share) fills it (its own width), nil hides it.
+function UI.Bar(parent, height, left, right, bottom)
+	local bar = Skin.ProgressLine(parent, height)
+	if left then
+		bar:SetPoint("BOTTOMLEFT", left, bottom)
+		bar:SetPoint("BOTTOMRIGHT", -right, bottom)
+	end
+	bar.fill:SetColorTexture(ns.EMBER[1], ns.EMBER[2], ns.EMBER[3], 0.9)
+	local Fill = bar.Set
+	function bar:Set(share)
+		self:SetShown(share ~= nil)
+		if share then Fill(self, share) end
+	end
+	return bar
+end
+
+-- The breath of what waits (a dot, a sign): its alpha now.
+function UI.Glow() return 0.55 + 0.45 * math.sin(GetTime() * 3) end
+
+-- A row of choices as wide as a page, its choices sharing it.
+function UI.Fill(bar, width)
+	bar:SetWidth(width)
+	local each = (width - 3 * (#bar.buttons + 1)) / #bar.buttons
+	for _, button in ipairs(bar.buttons) do button:SetWidth(each) end
 end
 
 -- A soft golden glint over a frame (a purchase, a choice): there, then gone in a moment.
@@ -158,7 +206,7 @@ function UI.Flash(frame, strength)
 	if not frame.wandererFlash then
 		frame.wandererFlash = frame:CreateTexture(nil, "OVERLAY")
 		frame.wandererFlash:SetAllPoints()
-		frame.wandererFlash:SetColorTexture(1, 0.78, 0.3, 1)
+		frame.wandererFlash:SetColorTexture(ns.WARM[1], ns.WARM[2], ns.WARM[3], 1)
 		frame.wandererFlash:SetBlendMode("ADD")
 		frame.wandererFlash:SetAlpha(0)
 	end
@@ -170,11 +218,6 @@ end
 function UI.Appear(frame, duration)
 	UI.Tween(frame, duration or 0.2, function(t) frame:SetAlpha(t) end)
 end
-local RAIL = 12 -- the scroll bar's room
-local THUMB_MIN = 24
-local ROW = 54 -- a row's height
-local GOLD = { 1, 0.82, 0 }
-local CROP = { 0.08, 0.92, 0.08, 0.92 } -- (an icon's edges cut away)
 
 local function NewRow(list)
 	local row = CreateFrame("Button", nil, list)
@@ -192,34 +235,26 @@ local function NewRow(list)
 	row.sub = Skin.Text(row, "GameTooltipTextSmall", "muted")
 	row.sub:SetJustifyH("LEFT")
 	row.sub:SetSpacing(2)
-	row.right = row:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
-	row.right:SetPoint("RIGHT", row, "RIGHT", -12, 0)
-	row.right:SetTextColor(0.88, 0.85, 0.77, 0.9)
 	row.chip = Skin.Chip(row)
+	-- (the glint first: what the click does may give the row to another line)
 	row.action = Skin.SmallButton(row, "", function(self)
-		if self.run then self.run(self) end
 		UI.Flash(row)
-	end, nil, 26)
-	Skin.Tooltip(row.action, function(self) return self.tip end)
-	row.more = row:CreateTexture(nil, "ARTWORK")
-	row.more:SetSize(14, 14)
+		if self.run then self.run(self) end
+	end, function(self) return self.tip end, 26)
+	row.more = Skin.Glyph(row, "chevron", 12)
 	row.more:SetPoint("RIGHT", row, "RIGHT", -10, 0)
-	row.more:SetTexture("Interface\\ChatFrame\\ChatFrameExpandArrow")
-	row.track = row:CreateTexture(nil, "BORDER")
-	row.track:SetPoint("BOTTOMLEFT", 1, 1)
-	row.track:SetPoint("BOTTOMRIGHT", -1, 1)
-	row.track:SetHeight(2)
-	row.track:SetColorTexture(1, 1, 1, 0.06)
-	row.bar = row:CreateTexture(nil, "ARTWORK")
-	row.bar:SetPoint("BOTTOMLEFT", 1, 1)
-	row.bar:SetHeight(2)
-	row.bar:SetColorTexture(1, 0.7, 0.25, 0.85)
+	row.bar = UI.Bar(row, 3, 1, 1, 1)
 	row:SetScript("OnClick", function(self, mouse)
 		local spec = self.spec
-		if spec and spec.onClick then
-			Sound()
-			spec.onClick(self, mouse)
+		-- (a row with a right click of its own: that one on a right click)
+		if spec and spec.onRight and mouse == "RightButton" then
+			Skin.Play("click")
+			UI.Flash(self, 0.2)
+			spec.onRight(self)
+		elseif spec and spec.onClick then
+			Skin.Play("click")
 			if spec.plain then UI.Flash(self, 0.2) end
+			spec.onClick(self, mouse)
 		end
 	end)
 	row:SetScript("OnEnter", function(self)
@@ -245,19 +280,28 @@ end
 -- A row filled from its spec; its height (taller when its sub runs on several lines).
 local function FillRow(row, spec, width)
 	row.spec = spec
-	row.hover:SetShown(spec.onClick ~= nil)
+	row.hover:SetShown(spec.onClick ~= nil or spec.onRight ~= nil)
 	local left = 12
-	row.icon:SetShown(spec.icon ~= nil)
-	if spec.icon then
+	-- (a companion: their round portrait instead of an icon)
+	local face = spec.companion ~= nil
+	if face and not row.portrait then
+		row.portrait = ns.Portrait(row, 40, true)
+		row.portrait:SetPoint("LEFT", row, "LEFT", 9, 0)
+	end
+	if row.portrait then row.portrait:SetShown(face) end
+	if face then
+		row.portrait:Set(spec.companion, { dim = spec.grey, hurt = ns.Hurt(spec.companion) })
+		left = 60
+	end
+	row.icon:SetShown(spec.icon ~= nil and not face)
+	if spec.icon and not face then
 		row.icon:Set(spec.icon, spec.quality)
-		local coords = spec.coords or CROP
-		row.icon.texture:SetTexCoord(coords[1], coords[2], coords[3], coords[4])
 		local shade = spec.shape and 0 or 1
 		row.icon.texture:SetVertexColor(shade, shade, shade)
 		row.icon.texture:SetDesaturated(spec.grey and true or false)
 		left = 56
 	end
-	-- On the right: a button and a chip (one above the other), or a big number, or a chevron.
+	-- On the right: a button and a chip (one above the other), or a chevron.
 	local right = 12
 	row.action:SetShown(spec.action ~= nil)
 	row.chip:Set(spec.chip, spec.tone)
@@ -279,10 +323,7 @@ local function FillRow(row, spec, width)
 		row.chip:SetPoint("RIGHT", row, "RIGHT", (spec.onClick and not spec.plain) and -30 or -10, 0)
 		if spec.onClick and not spec.plain then right = right + 20 end
 	end
-	row.right:SetText(spec.right or "")
-	row.right:SetShown(spec.right ~= nil)
-	if spec.right then right = math.max(right, U.Measure(row.right, "GetStringWidth", 30) + 24) end
-	row.more:SetShown(spec.onClick ~= nil and not spec.plain and spec.action == nil and spec.right == nil)
+	row.more:SetShown(spec.onClick ~= nil and not spec.plain and spec.action == nil)
 	if row.more:IsShown() and not spec.chip then right = math.max(right, 30) end
 	-- The words.
 	local room = width - left - right
@@ -302,16 +343,28 @@ local function FillRow(row, spec, width)
 	if spec.wrap and spec.sub then height = math.max(height, 10 + 15 + 4 + math.ceil(row.sub:GetStringHeight() or 14) + 11) end
 	-- (a chip above a button: room for both)
 	if spec.action and spec.chip then height = math.max(height, 62) end
+	-- (a right click of its own: its "..." under the mouse, left of the button, else at the row's end)
+	if spec.onRight and not row.rightMore then
+		row.rightMore = Skin.RowMore(row, function(self) if self.spec.onRight then self.spec.onRight(self) end end)
+	end
+	if row.rightMore then
+		row.rightMore:ClearAllPoints()
+		if spec.action then
+			row.rightMore:SetPoint("RIGHT", row.action, "LEFT", -4, 0)
+		else
+			row.rightMore:SetPoint("RIGHT", row, "RIGHT", -10, 0)
+		end
+		row.rightMore:SetAlpha(spec.onRight and 1 or 0)
+		row.rightMore:EnableMouse(spec.onRight ~= nil)
+	end
 	if not spec.sub then
 		row.title:ClearAllPoints()
 		row.title:SetPoint("LEFT", row, "LEFT", left, 0)
 	end
 	-- How far along (the next one, a level).
-	row.track:SetShown(spec.bar ~= nil)
-	row.bar:SetShown(spec.bar ~= nil)
-	if spec.bar then row.bar:SetWidth(math.max(1, (width - 2) * math.max(0, math.min(1, spec.bar)))) end
-	if spec.chosen then row.ground:SetColorTexture(1, 0.82, 0, 0.08) else row.ground:SetColorTexture(1, 1, 1, 0.035) end
-	row.edges.Color(1, spec.chosen and 0.82 or 1, spec.chosen and 0 or 1, spec.chosen and 0.35 or 0.07)
+	row.bar:Set(spec.bar)
+	if spec.chosen then row.ground:SetColorTexture(GOLD[1], GOLD[2], GOLD[3], 0.08) else row.ground:SetColorTexture(1, 1, 1, 0.035) end
+	if spec.chosen then row.edges.Color(GOLD[1], GOLD[2], GOLD[3], 0.35) else row.edges.Color(1, 1, 1, 0.07) end
 	row:SetAlpha(spec.dim and 0.55 or 1)
 	return height
 end
@@ -328,59 +381,17 @@ function UI.List(parent, width, shown)
 	list.scroll = scroll
 	parent.list = parent.list or list -- (a page's list: back to its top when the page is opened again)
 	list.pools, list.used, list.placed = { row = {}, caption = {}, text = {} }, {}, {}
-	-- The scroll bar: a thin rail, a thumb as long as the part shown (dragged; the rail clicked: a page).
-	local bar = CreateFrame("Button", nil, scroll)
+	-- The scroll bar (the kit's), in pixels.
+	local bar = Skin.ScrollBar(scroll, function(offset) list:ScrollTo(offset) end)
 	bar:SetPoint("TOPRIGHT", scroll, "TOPRIGHT", 0, 0)
 	bar:SetPoint("BOTTOMRIGHT", scroll, "BOTTOMRIGHT", 0, 0)
-	bar:SetWidth(RAIL - 2)
-	local rail = bar:CreateTexture(nil, "BACKGROUND")
-	rail:SetColorTexture(1, 0.82, 0, 0.18)
-	rail:SetWidth(2)
-	rail:SetPoint("TOP")
-	rail:SetPoint("BOTTOM")
-	local thumb = CreateFrame("Button", nil, bar)
-	thumb:SetWidth(6)
-	thumb.fill = thumb:CreateTexture(nil, "ARTWORK")
-	thumb.fill:SetAllPoints()
-	thumb.fill:SetColorTexture(1, 0.82, 0, 0.45)
-	bar:Hide()
 	local function Range() return math.max(0, list.total - list.view) end
-	local function DrawBar()
-		local range = Range()
-		bar:SetShown(range > 0)
-		if range <= 0 then return end
-		local size = math.max(THUMB_MIN, math.floor(list.view * list.view / list.total))
-		local position = math.floor((list.view - size) * scroll:GetVerticalScroll() / range + 0.5)
-		thumb:SetHeight(size)
-		thumb:ClearAllPoints()
-		thumb:SetPoint("TOP", bar, "TOP", 0, -position)
-	end
+	local function DrawBar() bar:Set(list.total, list.view, scroll:GetVerticalScroll()) end
 	function list:ScrollTo(y)
 		scroll:SetVerticalScroll(math.max(0, math.min(Range(), y)))
 		DrawBar()
 	end
 	function list:Top() self:ScrollTo(0) end
-	local function CursorTop()
-		local _, y = GetCursorPosition()
-		return (bar:GetTop() or 0) - y / bar:GetEffectiveScale()
-	end
-	thumb:SetScript("OnMouseDown", function(self)
-		self.grab = CursorTop() - (scroll:GetVerticalScroll() / math.max(1, Range())) * (list.view - self:GetHeight())
-		self:SetScript("OnUpdate", function(own)
-			-- Let go anywhere: the drag ends.
-			if IsMouseButtonDown and not IsMouseButtonDown("LeftButton") then return own:SetScript("OnUpdate", nil) end
-			local free = list.view - own:GetHeight()
-			if free > 0 then list:ScrollTo((CursorTop() - own.grab) / free * Range()) end
-		end)
-	end)
-	thumb:SetScript("OnMouseUp", function(self) self:SetScript("OnUpdate", nil) end)
-	thumb:SetScript("OnEnter", function(self) self.fill:SetColorTexture(1, 0.82, 0, 0.8) end)
-	thumb:SetScript("OnLeave", function(self) self.fill:SetColorTexture(1, 0.82, 0, 0.45) end)
-	bar:SetScript("OnClick", function()
-		local position = (scroll:GetVerticalScroll() / math.max(1, Range())) * (list.view - thumb:GetHeight())
-		local below = CursorTop() > position + thumb:GetHeight()
-		list:ScrollTo(scroll:GetVerticalScroll() + (below and 1 or -1) * (list.view - 40))
-	end)
 	scroll:EnableMouseWheel(true)
 	scroll:SetScript("OnMouseWheel", function(_, delta) list:ScrollTo(scroll:GetVerticalScroll() - delta * 60) end)
 
@@ -410,10 +421,13 @@ function UI.List(parent, width, shown)
 		local caption = Take("caption", function()
 			local frame = CreateFrame("Frame", nil, list)
 			frame:SetHeight(16)
-			frame.caps = Skin.Caps(frame, "")
-			frame.caps:SetPoint("LEFT")
 			frame.aside = Skin.Text(frame, "GameTooltipTextSmall", "muted")
 			frame.aside:SetPoint("RIGHT")
+			frame.caps = Skin.Caps(frame, "")
+			frame.caps:SetPoint("LEFT")
+			frame.caps:SetPoint("RIGHT", frame.aside, "LEFT", -8, 0)
+			frame.caps:SetJustifyH("LEFT")
+			if frame.caps.SetWordWrap then frame.caps:SetWordWrap(false) end
 			return frame
 		end)
 		caption:SetWidth(self.width)
@@ -434,7 +448,7 @@ function UI.List(parent, width, shown)
 			frame.text:SetSpacing(2)
 			return frame
 		end)
-		holder.text:SetFontObject(template or "GameTooltipTextSmall")
+		holder.text:SetFontObject(Skin.FontFor(template or "GameTooltipTextSmall"))
 		local c = Skin.COLORS[role or "soft"] or Skin.COLORS.soft
 		holder.text:SetTextColor(c[1], c[2], c[3])
 		holder.text:SetWidth(self.width)
@@ -478,17 +492,16 @@ function UI.List(parent, width, shown)
 	return list, scroll
 end
 
--- A card: a soft panel with a caption and words, placed by its page.
-function UI.Card(parent)
-	local card = Skin.Panel(parent)
-	card.caption = Skin.Caps(card, "", "gold")
-	card.caption:SetPoint("TOPLEFT", card, "TOPLEFT", 14, -12)
-	card.text = Skin.Text(card, "GameTooltipTextSmall", "soft")
-	card.text:SetPoint("TOPLEFT", card.caption, "BOTTOMLEFT", 0, -6)
-	card.text:SetPoint("RIGHT", card, "RIGHT", -14, 0)
-	card.text:SetJustifyH("LEFT")
-	card.text:SetSpacing(2)
-	return card
+-- First steps: a few words at the top of a page, until "Got it" (once for each, per character).
+function ns.Tip(list, key)
+	local s = ns.State()
+	s.tips = type(s.tips) == "table" and s.tips or {}
+	if s.tips[key] then return end
+	list:Row({ icon = "Interface\\Icons\\INV_Misc_Book_08", title = L.TIP_TITLE, color = Skin.COLORS.gold, sub = L["TIP_" .. key:upper()], wrap = true,
+		action = { text = L.TIP_OK, fn = function()
+			s.tips[key] = true
+			ns.Redraw()
+		end } })
 end
 
 -- Pages -----------------------------------------------------------------------------------------------------
@@ -496,7 +509,7 @@ end
 -- A page: its key, its name, build(frame) once, draw(arg) each time it is shown or the camp changes.
 -- opts: { tab (its place among the tabs), icon, parent (a page opened from that one: a way back),
 -- screen (the whole window, no tabs), title(arg) (its heading), desc (a menu's line), badge() (something to
--- do there: a dot on its tab), summary() (a chip in a menu: text, tone) }.
+-- do there: a dot on its tab), summary() (a chip in a menu: text, tone), live (drawn again each second) }.
 function ns.AddPage(key, label, build, draw, opts)
 	opts = opts or {}
 	local page = { key = key, label = label, build = build, draw = draw }
@@ -506,17 +519,21 @@ function ns.AddPage(key, label, build, draw, opts)
 end
 
 -- Your resources, on a strip: each with its icon; hovered, what it is for.
+-- (a text given to the game only when it changes: each change makes it draw again)
 local function Write(region, text)
 	if region.wandererText ~= text then
 		region.wandererText = text
 		region:SetText(text)
 	end
 end
+ns.Write = Write
 local function Resources()
 	local s = ns.State()
 	local cells = window.strip.cells
 	Write(cells.embers.value, ns.Short(s.embers))
-	Write(cells.provisions.value, ns.Short(s.provisions) .. U.Colorize(" / " .. ns.Short(ns.Rates().provisionsCap), 0.56, 0.53, 0.46))
+	local cap = ns.ProvisionsCap()
+	local both = ns.Short(s.provisions) .. Skin.Colorize(" / " .. ns.Short(cap), "muted")
+	Write(cells.provisions.value, (s.provisions < 1000 and cap < 1000) and both or ns.Short(s.provisions))
 	Write(cells.renown.value, ns.Short(s.renown))
 	Write(cells.supplies.value, ns.Short(s.supplies))
 end
@@ -541,7 +558,7 @@ end
 
 -- (the dots of the tabs breathe while something waits)
 local function Breathe()
-	local glow = 0.55 + 0.45 * math.sin(GetTime() * 3)
+	local glow = UI.Glow()
 	for _, button in ipairs(window.tabs.buttons) do button.dot:SetAlpha(glow) end
 end
 
@@ -587,6 +604,8 @@ local function Draw()
 	Resources()
 	Tabs(page)
 	page.draw(page.arg)
+	-- (the return card, when it is shown: what it lists kept in step)
+	ns.DrawReturn()
 end
 ns.Redraw = Draw
 
@@ -620,15 +639,14 @@ local function DrawMore()
 			local chip, tone
 			if each.summary then chip, tone = each.summary() end
 			list:Row({ icon = each.icon, title = each.label, color = Skin.COLORS.gold, sub = each.desc, wrap = true, chip = chip, tone = tone,
-				height = 62, onClick = function() Show(each.key) end })
+				height = 62, onClick = function() Show(each.key, false) end }) -- (from the menu: the page itself, nothing it showed before)
 		end
 	end
 	list:Done()
 end
 ns.AddPage("more", L.TAB_MORE, BuildMore, DrawMore, { tab = 5, icon = "Interface\\Icons\\INV_Misc_Book_09",
 	badge = function()
-		for _, wanted in ipairs(ns.State().orders) do if ns.CanHonor(wanted) then return true end end
-		return false
+		return ns.OrderReady() or ns.WeekReady()
 	end })
 
 -- Before the fire: an invitation; after it is lit, what your journey brought (once).
@@ -674,49 +692,6 @@ local function BuildLight()
 	light.text:SetText(L.LIGHT_TEXT)
 end
 
--- While you were away: a card over the camp, what changed since you last saw it; a button back to the fire.
-local function ShowAway(recap)
-	if not away then
-		away = Skin.Panel(window)
-		away:SetPoint("LEFT", window, "LEFT", window.margin + 10, 0)
-		away:SetPoint("RIGHT", window, "RIGHT", -(window.margin + 10), 0)
-		away:SetHeight(300)
-		away:SetPoint("CENTER", window, "CENTER", 0, 0)
-		away:SetFrameLevel(window:GetFrameLevel() + 20)
-		away:EnableMouse(true)
-		local ground = away:CreateTexture(nil, "BACKGROUND", nil, -1)
-		ground:SetAllPoints()
-		ground:SetColorTexture(0.04, 0.035, 0.03, 0.97)
-		away.title = Skin.Text(away, "GameFontNormalLarge", "gold")
-		away.title:SetPoint("TOP", away, "TOP", 0, -24)
-		away.title:SetText(L.AWAY_TITLE)
-		away.since = Skin.Text(away, "GameTooltipTextSmall", "muted")
-		away.since:SetPoint("TOP", away.title, "BOTTOM", 0, -6)
-		away.text = Skin.Text(away, "GameTooltipText", "soft")
-		away.text:SetPoint("TOPLEFT", away, "TOPLEFT", 30, -78)
-		away.text:SetPoint("RIGHT", away, "RIGHT", -30, 0)
-		away.text:SetJustifyH("LEFT")
-		away.text:SetSpacing(5)
-		away.button = Skin.Button(away, L.AWAY_BUTTON, function()
-			away:Hide()
-			Show("fire")
-		end, "main", 200)
-		away.button:SetHeight(38)
-		away.button:SetPoint("BOTTOM", away, "BOTTOM", 0, 22)
-	end
-	away.since:SetText(L.AWAY_FOR:format(U.Ago(recap.away)))
-	local lines = {}
-	for _, key in ipairs({ "embers", "provisions", "renown", "supplies" }) do
-		if recap[key] > 0 then lines[#lines + 1] = ns.Amount(key, recap[key], "+") .. "  " .. L[key:upper()] end
-	end
-	if recap.back > 0 then lines[#lines + 1] = L.AWAY_BACK:format(recap.back, recap.won) end
-	if recap.trophies > 0 then lines[#lines + 1] = L.AWAY_TROPHIES:format(recap.trophies) end
-	if recap.levels > 0 then lines[#lines + 1] = L.AWAY_LEVELS:format(recap.levels) end
-	away.text:SetText(table.concat(lines, "\n"))
-	away:Show()
-	UI.Appear(away, 0.35)
-end
-
 local function BuildStrip(margin)
 	local strip = Skin.Panel(window)
 	strip:SetPoint("TOPLEFT", window, "TOPLEFT", margin, -(margin + HEAD))
@@ -740,8 +715,8 @@ local function BuildStrip(margin)
 			GameTooltip:SetOwner(self, "ANCHOR_BOTTOM")
 			GameTooltip:AddDoubleLine(L[key:upper()], ns.Number(ns.State()[key]), GOLD[1], GOLD[2], GOLD[3], 1, 1, 1)
 			GameTooltip:AddLine(L[key:upper() .. "_DESC"], 1, 1, 1, true)
-			if key == "embers" then GameTooltip:AddLine(L.PER_SECOND:format(ns.Short(ns.PerSecond())), 0.56, 0.88, 0.64) end
-			if key == "provisions" then GameTooltip:AddLine(L.PER_HOUR:format(ns.Number(ns.Rates().provisions)), 0.56, 0.88, 0.64) end
+			if key == "embers" then GameTooltip:AddLine(L.PER_SECOND:format(ns.Short(ns.PerSecond())), Skin.COLORS.good[1], Skin.COLORS.good[2], Skin.COLORS.good[3]) end
+			if key == "provisions" then GameTooltip:AddLine(L.PER_HOUR:format(ns.Number(ns.Rates().provisions)), Skin.COLORS.good[1], Skin.COLORS.good[2], Skin.COLORS.good[3]) end
 			GameTooltip:Show()
 		end)
 		cell:SetScript("OnLeave", function() GameTooltip:Hide() end)
@@ -774,11 +749,11 @@ local function BuildTabs(margin)
 		button.mark:SetPoint("TOPLEFT", button, "TOPLEFT", 10, 0)
 		button.mark:SetPoint("TOPRIGHT", button, "TOPRIGHT", -10, 0)
 		button.mark:SetHeight(2)
-		button.mark:SetColorTexture(1, 0.82, 0, 0.9)
+		button.mark:SetColorTexture(GOLD[1], GOLD[2], GOLD[3], 0.9)
 		button.icon = button:CreateTexture(nil, "ARTWORK")
 		button.icon:SetSize(24, 24)
 		button.icon:SetPoint("TOP", button, "TOP", 0, -7)
-		button.icon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
+		ns.Crop(button.icon)
 		button.icon:SetTexture(page.icon)
 		button.label = Skin.Text(button, "GameFontHighlightSmall", "muted")
 		button.label:SetPoint("TOP", button.icon, "BOTTOM", 0, -3)
@@ -786,13 +761,17 @@ local function BuildTabs(margin)
 		button.label:SetWidth(width - 4)
 		if button.label.SetWordWrap then button.label:SetWordWrap(false) end
 		button.label:SetText(page.label)
-		button.dot = button:CreateTexture(nil, "OVERLAY")
-		button.dot:SetSize(10, 10)
+		button.dot = Skin.Glyph(button, "dot", 10, "OVERLAY")
+		button.dot:SetVertexColor(GOLD[1], GOLD[2], GOLD[3])
 		button.dot:SetPoint("CENTER", button.icon, "TOPRIGHT", 0, 0)
-		button.dot:SetTexture("Interface\\COMMON\\Indicator-Yellow")
 		button.dot:Hide()
+		-- (its key, seen while the window lends its keys: the mouse over it)
+		button.key = Skin.Text(button, "GameFontHighlightSmall", "muted")
+		button.key:SetPoint("TOPLEFT", button, "TOPLEFT", 8, -6)
+		button.key:SetText(index)
+		button.key:Hide()
 		button:SetScript("OnClick", function()
-			Sound()
+			Skin.Play("click")
 			Show(page.key)
 		end)
 		bar.buttons[index] = button
@@ -800,23 +779,28 @@ local function BuildTabs(margin)
 	window.tabs = bar
 end
 
+names:SetScript("OnEvent", U.Debounce(0.5, function()
+	if not (window and window:IsShown()) then return end
+	ns.Redraw()
+	ns.RefreshReport()
+end))
+
 local function Create()
-	window = Skin.CreateWindow("WandererCampfireGame", "MEDIUM")
+	window = Skin.CreateWindow("WandererCampfireGameWindow", "MEDIUM")
+	Skin.Sounds(window, Skin.SOUNDS.open, Skin.SOUNDS.close)
 	Skin.Dress(window, { "CENTER", UIParent, "CENTER", 0, 30 }, "campfirePos")
 	window:SetSize(WIDTH, HEIGHT)
-	local kicker, title, margin = Skin.Header(window, "Wanderer", L.TITLE)
+	-- (a cog in the heading, to the camp's settings)
+	local kicker, title, margin = Skin.Header(window, "Wanderer", L.TITLE, { settings = "ext:campfire" })
 	window.kicker, window.title, window.margin = kicker, title, margin
 	-- (a page opened from another: the way back, before its name)
 	window.back = Skin.SmallButton(window, "", GoBack, function()
 		local from = current and pages[current.back or current.parent or ""]
-		return from and from.label or nil
+		return from and { from.label, L.BACK_KEY:format(_G.KEY_BACKSPACE or "Backspace") } or nil
 	end, 30)
 	window.back:SetWidth(30)
 	window.back:SetPoint("TOPLEFT", window, "TOPLEFT", margin, -margin + 1)
-	local arrow = window.back:CreateTexture(nil, "ARTWORK")
-	arrow:SetSize(22, 22)
-	arrow:SetPoint("CENTER")
-	arrow:SetTexture("Interface\\Buttons\\UI-SpellbookIcon-PrevPage-Up")
+	Skin.Glyph(window.back, "back", 14):SetPoint("CENTER")
 	window.back:Hide()
 	BuildStrip(margin)
 	-- The pages, between the strip and the tabs (a screen: the whole window under the heading).
@@ -836,38 +820,110 @@ local function Create()
 	-- Shown: the camp looked at; then every few seconds while it stays shown.
 	local since = 0
 	window:HookScript("OnShow", function(self)
-		self:SetScale(Skin.Scale())
+		self:SetScale(Skin.FitScale(self))
 		ns.State().unseen = nil
-		if ns.HearNames then ns.HearNames(true) end
+		ns.DropHeld()
+		names:RegisterEvent("GET_ITEM_INFO_RECEIVED")
 		ns.Update()
 		Draw()
-		-- (back after a while: what the camp did meanwhile)
+		-- Back after a while, or several expeditions back: one card for all of it (a report left open waits
+		-- behind it); one expedition alone: its report.
 		local recap = ns.WhileAway()
-		if recap then ShowAway(recap) elseif away then away:Hide() end
+		local fresh = ns.Reports()
+		if (recap and not recap.nothing) or fresh[2] then
+			ns.HideReport()
+			ns.ShowReturn(recap and not recap.nothing and recap or nil)
+		else
+			ns.HideReturn()
+			if recap and not fresh[1] then ns.NothingNew() end
+			ns.ShowReports()
+		end
 	end)
 	window:HookScript("OnHide", function()
+		-- (a question of this window left open: answered no, before the new fire is lit)
+		if asked then Skin.CancelAsk(asked) end
 		if ns.State().choosing then ns.Kindle() end
-		if ns.HearNames then ns.HearNames(false) end
+		names:UnregisterEvent("GET_ITEM_INFO_RECEIVED")
 		ns.Snapshot()
+		ns.Keys()
 	end)
 	-- (the fire makes its embers every moment while you look; the counters drawn ten times a second)
-	local live = 0
+	-- (a page that spends embers drawn again each second: its buttons lit as soon as they may be clicked)
+	local live, second = 0, 0
 	window:SetScript("OnUpdate", function(_, elapsed)
 		live = live + elapsed
+		second = second + elapsed
 		if live >= 0.1 then
+			ns.Keys()
 			if ns.Lit() then ns.Tick(live) end
 			live = 0
-			if current and current.key == "fire" and ns.FireLive and ns.Lit() and not light:IsShown() then ns.FireLive() end
+			if current and current.key == "fire" and ns.Lit() and not light:IsShown() then ns.FireLive() end
 			if ns.Lit() and window.strip:IsShown() then Resources() end
+		end
+		if second >= 1 then
+			second = 0
+			if current and current.live and ns.Lit() and not light:IsShown() then current.draw(current.arg) end
 		end
 		since = since + elapsed
 		if since < LOOK_EVERY then return end
 		since = 0
 		ns.Back(ns.Update()) -- (drawn again there)
-		if ns.SaySaid then ns.SaySaid() end
+	end)
+	-- The keys' buttons (clicked by the keys the window lends).
+	for index = 1, #window.tabs.buttons do
+		CreateFrame("Button", "WandererCampfireGameKey" .. index, window):SetScript("OnClick", function()
+			local button = window.tabs.buttons[index]
+			if button and button:IsShown() then button:Click() end
+		end)
+	end
+	CreateFrame("Button", "WandererCampfireGameKeyBack", window):SetScript("OnClick", function()
+		if current and current.parent then
+			Skin.Play("click")
+			GoBack()
+		end
+	end)
+	CreateFrame("Button", "WandererCampfireGameKeySpace", window):SetScript("OnClick", function()
+		if not ns.ReturnMain() then ns.ReportMain() end
 	end)
 	Skin.Get(window):Layout()
 end
+
+-- Keys ------------------------------------------------------------------------------------------------------
+-- While the mouse is over the window, never in a fight: 1 to 5 its tabs, Backspace back from a page opened from
+-- another, Space the main button of the card shown (the return, a report). Lent only then: everywhere else the
+-- game's keys stay yours (Space jumps, 1 to 5 your bars).
+local lent -- the keys lent now, in one word
+function ns.Keys()
+	local wanted
+	if window and window:IsShown() and window:IsMouseOver() and not light:IsShown() and not InCombatLockdown() then
+		if ns.ReturnShown() or ns.ReportShown() then
+			wanted = "card"
+		else
+			wanted = (current and current.parent) and "tabs back" or "tabs"
+		end
+	end
+	if wanted == lent or InCombatLockdown() then return end
+	lent = wanted
+	pcall(ClearOverrideBindings, window)
+	for _, button in ipairs(window.tabs.buttons) do button.key:SetShown(wanted ~= nil and wanted ~= "card") end
+	if not wanted then return end
+	if wanted == "card" then return pcall(SetOverrideBindingClick, window, true, "SPACE", "WandererCampfireGameKeySpace") end
+	for index = 1, #window.tabs.buttons do pcall(SetOverrideBindingClick, window, true, tostring(index), "WandererCampfireGameKey" .. index) end
+	if wanted:find("back", 1, true) then pcall(SetOverrideBindingClick, window, true, "BACKSPACE", "WandererCampfireGameKeyBack") end
+end
+-- (a fight begins: the keys given back at once, before the game locks them)
+local fight = CreateFrame("Frame")
+fight:RegisterEvent("PLAYER_REGEN_DISABLED")
+fight:SetScript("OnEvent", function()
+	if not (window and lent) then return end
+	lent = nil
+	pcall(ClearOverrideBindings, window)
+	for _, button in ipairs(window.tabs.buttons) do button.key:Hide() end
+end)
+
+function ns.WindowFrame() return window end
+-- Where the pages begin under the heading (a card over the window leaves the heading free).
+function ns.WindowTop() return window.margin + HEAD end
 
 function ns.Toggle()
 	if not window then Create() end
@@ -882,25 +938,59 @@ end
 
 -- Notices -------------------------------------------------------------------------------------------------
 
-local function PlaceOf(told) return ns.PlaceName(told.area) end
+
+-- The expeditions back not told yet: held while you fight or are inside a dungeon, a raid or a battleground,
+-- then told in one notice once you are free of them.
+local held = {}
+local function Busy()
+	if InCombatLockdown() then return true end
+	return IsInInstance and IsInInstance() and true or false
+end
+local function Tell()
+	if not held[1] then return end
+	local list = held
+	held = {}
+	local settings = Settings()
+	-- (the window open meanwhile: its reports said it already)
+	if not (settings and settings.notify and W.Toast) or (window and window:IsShown()) then return end
+	if #list == 1 then
+		local told = list[1]
+		W.Toast(L.BACK_TITLE, L.BACK_ONE:format(ns.PlaceName(told.area), told.won and L.WON or L.LOST), { kicker = "Wanderer", duration = 5, corner = true })
+	else
+		W.Toast(L.BACK_TITLE, L.BACK_MANY:format(#list), { kicker = "Wanderer", duration = 5, corner = true })
+	end
+end
+-- (free again: out of the fight, out of the instance)
+function ns.TellHeld()
+	if Busy() then
+		if InCombatLockdown() then U.AfterFight("campfireNotices", ns.TellHeld) end
+		return
+	end
+	Tell()
+end
+-- (the window opened: everything held is in its reports)
+function ns.DropHeld() wipe(held) end
 
 -- Expeditions back while you play: a short notice (an option, on), the window drawn again; its window closed,
 -- news waiting (the bar's word pulses until it is opened).
 function ns.Back(back)
 	if back and back[1] and not (window and window:IsShown()) then ns.State().unseen = true end
 	Draw()
+	ns.SaySaid()
+	-- (the window open: their reports at once, unless the return card lists them already)
+	if back and back[1] and window and window:IsShown() and not ns.ReturnShown() then ns.ShowReports() end
 	local settings = Settings()
-	if not (back and back[1] and settings and settings.notify and W.Toast) then return end
-	if #back == 1 then
-		local told = back[1]
-		W.Toast(L.BACK_TITLE, L.BACK_ONE:format(PlaceOf(told), told.won and L.WON or L.LOST), { duration = 5, corner = true })
-	else
-		W.Toast(L.BACK_TITLE, L.BACK_MANY:format(#back), { duration = 5, corner = true })
-	end
+	-- (the window open: its report says it already)
+	if not (back and back[1] and settings and settings.notify and W.Toast) or (window and window:IsShown()) then return end
+	for _, told in ipairs(back) do held[#held + 1] = told end
+	ns.TellHeld()
 end
 
+-- (Wanderer off: taken, never said; the camp's journal keeps what matters)
 function ns.SaySaid()
-	for _, said in ipairs(ns.TakeSaid()) do
+	local list = ns.TakeSaid()
+	if not Settings() then return end
+	for _, said in ipairs(list) do
 		if not W.Print then return end
 		if said[1] == "champion" then W.Print(L.CHAMPION_JOINED:format(said[2])) end
 		if said[1] == "lived" then W.Print(L.LIVED_SAID:format(ns.PlaceName(said[2]))) end
@@ -916,16 +1006,18 @@ function WandererCampfireGame_Toggle() ns.Toggle() end
 
 function ns.Init()
 	if not (W and W.RegisterExtension) then return end
-	if (W.API or 1) < 6 then return W.Print(L.NEEDS_WANDERER) end
+	-- (built on Wanderer's API 15: an older Wanderer is only asked to update, nothing of it is called)
+	if (W.API or 1) < 15 then return W.Print(L.NEEDS_WANDERER) end
 	W.RegisterExtension({
 		key = "campfire",
+		slash = "/wcampfire",
 		addon = ADDON,
 		title = L.ADDON,
 		news = L.NEWS_LINES,
 		defaults = { notify = true },
-		launcher = { label = L.TITLE, open = function() ns.Toggle() end, attention = function() return ns.Attention() end },
+		launcher = { label = L.TITLE, open = function() ns.Toggle() end, attention = function() return ns.Attention() end,
+			summary = function() return ns.Summary() end },
 		options = function(o)
-			o.Header(L.ADDON)
 			o.Button(L.TITLE, L.OPEN, L.OPEN_DESC, function()
 				o.CloseSettings()
 				ns.Open()
@@ -941,17 +1033,25 @@ function ns.Init()
 	local events = CreateFrame("Frame")
 	events:RegisterEvent("PLAYER_LOGIN")
 	events:RegisterEvent("ZONE_CHANGED_NEW_AREA")
+	events:RegisterEvent("PLAYER_ENTERING_WORLD")
 	events:RegisterEvent("PLAYER_LOGOUT")
 	events:SetScript("OnEvent", function(_, event)
-		if event == "ZONE_CHANGED_NEW_AREA" then return ns.NoteVisit() end
+		-- (out of an instance through a loading screen, the zone event may not come; the held list is emptied
+		-- before its notice, so both events together still tell it once)
+		if event == "PLAYER_ENTERING_WORLD" then return ns.TellHeld() end
+		if event == "ZONE_CHANGED_NEW_AREA" then
+			-- (out of a dungeon or a raid: the notices held told now)
+			ns.TellHeld()
+			return ns.NoteVisit()
+		end
 		-- (leaving: the camp as you leave it, for the next "while you were away")
 		if event == "PLAYER_LOGOUT" then
 			if ns.State().choosing then ns.Kindle() end
 			return ns.Snapshot()
 		end
 		C_Timer.After(5, function()
+			ns.NoteVisit()
 			ns.Back(ns.Update())
-			ns.SaySaid()
 		end)
 	end)
 end

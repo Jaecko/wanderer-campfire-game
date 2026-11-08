@@ -17,17 +17,16 @@ local GLOW = "Interface\\AddOns\\Wanderer\\Media\\MinimapFade"
 local SCENE = 256 -- the fire's scene, always shown
 local FOOT = 48 -- its foot: the tier
 local TILE, TILE_GAP = 40, 6 -- an upgrade's tile
-local GOLD, SOFT, BAD = { 1, 0.82, 0.42 }, { 0.88, 0.85, 0.77 }, { 0.95, 0.5, 0.45 }
+-- The seats around the fire (from its middle: right, up), two by two; all beside the fire one clicks.
+local SEATS = { { -118, -14 }, { 118, -14 }, { -148, -32 }, { 148, -32 }, { -104, -40 }, { 104, -40 }, { -160, -4 }, { 160, -4 },
+	{ -136, 14 }, { 136, 14 }, { -156, 38 }, { 156, 38 } }
+local GOLD, SOFT, GOOD, BAD = Skin.COLORS.gold, Skin.COLORS.soft, Skin.COLORS.good, Skin.COLORS.bad
 
 local view = {}
+local Pulse -- (below: a purchase makes the counter swell)
 
 -- (a text, a color, a width, a state given to the game only when it changes: each change makes it draw again)
-local function Text(region, text)
-	if region.wandererText ~= text then
-		region.wandererText = text
-		region:SetText(text)
-	end
-end
+local Text = ns.Write
 local function Tint(region, color)
 	if region.wandererTint ~= color then
 		region.wandererTint = color
@@ -40,24 +39,7 @@ local function Grey(texture, grey)
 		texture:SetDesaturated(grey)
 	end
 end
-local function Width(region, width)
-	width = math.floor(width + 0.5)
-	if region.wandererWidth ~= width then
-		region.wandererWidth = width
-		region:SetWidth(width)
-	end
-end
 local tiles, pops, rows = {}, {}, {}
-
-local Decimal = ns.Decimal
-
-local function Tip(owner, lines)
-	GameTooltip:SetOwner(owner, "ANCHOR_LEFT")
-	for index, line in ipairs(lines) do
-		if index == 1 then GameTooltip:AddLine(line, GOLD[1], GOLD[2], GOLD[3]) else GameTooltip:AddLine(line[1], line[2], line[3], line[4], true) end
-	end
-	GameTooltip:Show()
-end
 
 local function Affordable(price) return ns.State().embers >= price end
 
@@ -82,24 +64,23 @@ local function Tile(index)
 	tile.icon = tile:CreateTexture(nil, "ARTWORK")
 	tile.icon:SetPoint("TOPLEFT", 2, -2)
 	tile.icon:SetPoint("BOTTOMRIGHT", -2, 2)
-	tile.icon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
-	tile.edges = Skin.Edges(tile, 1, 0.82, 0, 0.8)
+	ns.Crop(tile.icon)
+	tile.edges = Skin.Edges(tile, GOLD[1], GOLD[2], GOLD[3], 0.8)
 	tile:SetHighlightTexture("Interface\\Buttons\\ButtonHilight-Square", "ADD")
 	tile:SetScript("OnClick", function(self)
 		if self.upgrade and ns.BuyUpgrade(self.upgrade.id) then
-			if U.PlaySound then U.PlaySound("IG_MAINMENU_OPTION_CHECKBOX_ON") end
-			ns.FirePulse()
+			Skin.Play("click")
+			Pulse()
 			ns.Redraw()
 		end
 	end)
-	tile:SetScript("OnEnter", function(self)
+	Skin.Tooltip(tile, function(self)
 		local upgrade = self.upgrade
-		if not upgrade then return end
+		if not upgrade then return nil end
 		local can = Affordable(upgrade.price)
-		Tip(self, { UpgradeName(upgrade), { UpgradeText(upgrade), 1, 1, 1 },
-			{ L.COST_EMBERS:format(ns.Short(upgrade.price)), can and 0.56 or BAD[1], can and 0.88 or BAD[2], can and 0.64 or BAD[3] } })
-	end)
-	tile:SetScript("OnLeave", function() GameTooltip:Hide() end)
+		return { UpgradeName(upgrade), { UpgradeText(upgrade), 1, 1, 1 },
+			{ L.COST_EMBERS:format(ns.Short(upgrade.price)), (can and GOOD or BAD)[1], (can and GOOD or BAD)[2], (can and GOOD or BAD)[3] } }
+	end, "ANCHOR_LEFT")
 	tiles[index] = tile
 	return tile
 end
@@ -113,7 +94,7 @@ local function Buy(key)
 		while count > 1 and ns.GenPrice(key, count) > ns.State().embers do count = count - 1 end
 	end
 	if ns.BuyGenerator(key, count) then
-		ns.FirePulse()
+		Pulse()
 		ns.Redraw()
 	end
 end
@@ -121,7 +102,7 @@ end
 -- Drawing -------------------------------------------------------------------------------------------------
 
 local function Why(why, nextTier)
-	return why == "level" and L.WHY_LEVEL:format(nextTier.level) or why == "renown" and L.WHY_RENOWN or why == "embers" and L.WHY_EMBERS or nil
+	return why == "level" and L.WHY_LEVEL:format(nextTier.level) or why and L["WHY_" .. why:upper()] or nil
 end
 
 -- What may come within reach as the embers grow (an upgrade, the next producer seen, a new fire): drawn again.
@@ -136,9 +117,9 @@ local function Live()
 	local s = ns.State()
 	Text(view.count, ns.Short(s.embers))
 	Text(view.rate, L.PER_SECOND:format(ns.Short(ns.PerSecond())))
-	-- By a real campfire of the game (and its furniture): everything grows, said in gold.
+	-- By a real campfire of the game: everything grows, said in gold.
 	local hearth = ns.HearthFactor()
-	Text(view.click, L.PER_CLICK:format(ns.Short(ns.ClickPower())) .. (hearth > 1 and ("   " .. U.Colorize(L.HEARTH_ON:format(Decimal(hearth, 2)), 1, 0.82, 0)) or ""))
+	Text(view.click, L.PER_CLICK:format(ns.Short(ns.ClickPower())) .. (hearth > 1 and ("   " .. Skin.Colorize(L.HEARTH_ON:format(ns.Decimal(hearth, 2)), "gold")) or ""))
 	-- (what came within reach as the embers grew: drawn again, once a second)
 	if GetTime() - (view.drawn or 0) >= 1 then
 		view.drawn = GetTime()
@@ -160,7 +141,7 @@ local function Live()
 				row.action:SetEnabled(can)
 			end
 			Grey(row.icon.texture, not can)
-			Width(row.bar, math.max(1, (row:GetWidth() - 2) * math.min(1, s.embers / price)))
+			row.bar:Set(math.min(1, s.embers / price))
 		end
 	end
 	for _, tile in ipairs(tiles) do
@@ -173,18 +154,16 @@ local function Live()
 			end
 		end
 	end
-	-- The fire's tier: how close the next is.
+	-- The fire's tier: how close the next is (the eternal blaze has always a next).
 	local nextTier = ns.NextTier()
-	if nextTier then
-		Width(view.tierBar, math.max(1, view.tierTrack:GetWidth() * math.min(1, s.embers / math.max(1, nextTier.embers))))
-		local can, why = ns.CanRaise()
-		can = can and true or false
-		if view.raise.wandererCan ~= can then
-			view.raise.wandererCan = can
-			view.raise:SetEnabled(can)
-		end
-		Text(view.why, not can and (Why(why, nextTier) or "") or "")
+	view.tierLine:Set(math.min(1, s.embers / math.max(1, nextTier.embers)))
+	local can, why = ns.CanRaise()
+	can = can and true or false
+	if view.raise.wandererCan ~= can then
+		view.raise.wandererCan = can
+		view.raise:SetEnabled(can)
 	end
+	Text(view.why, not can and (Why(why, nextTier) or "") or "")
 end
 ns.FireLive = Live
 
@@ -193,13 +172,21 @@ local function DrawList()
 	local list = view.list
 	list:Begin()
 	wipe(rows)
+	-- What waits for a while only (an order, an event by the fire, the week's chest, a talent): one click away.
+	local waiting = ns.Waiting()
+	if waiting[1] then
+		list:Caption(L.WAITING_TITLE)
+		for _, item in ipairs(waiting) do
+			list:Row({ icon = item.icon, title = item.text, color = Skin.COLORS.gold, height = 40, onClick = function() ns.ShowPage(item.page) end })
+		end
+	end
 	-- A new fire, first when this one can leave ashes.
 	local gain = ns.AshesFor()
 	local rekindle = { icon = "Interface\\Icons\\Spell_Fire_SelfDestruct", title = L.ASH_TITLE, color = Skin.COLORS.gold, wrap = true,
-		sub = gain >= 1 and L.ASH_GAIN:format(ns.Number(gain), math.floor(gain * ns.ASH_BONUS * 100 + 0.5)) or L.ASH_NOT_YET:format(ns.Short(ns.ASH_UNIT)),
+		sub = gain >= 1 and L.ASH_GAIN:format(ns.Number(gain), ns.AshPercent(gain)) or L.ASH_NOT_YET:format(ns.Short(ns.ASH_UNIT)),
 		tip = { L.ASH_TITLE, L.ASH_TEXT, L.ASH_HINT },
 		action = { text = L.ASH_REKINDLE, enabled = gain >= 1, fn = function()
-			Skin.Ask(L.ASH_ASK:format(ns.Number(ns.AshesFor())), function()
+			ns.Ask(L.ASH_ASK:format(ns.Number(ns.AshesFor())), function()
 				if ns.Rekindle() then ns.ShowPage("ashes") end
 			end)
 		end } }
@@ -209,7 +196,6 @@ local function DrawList()
 	list:Caption(L.UPGRADES_TITLE, #upgrades > 0 and tostring(#upgrades) or nil)
 	if #upgrades == 0 then
 		list:Text(L.UPGRADES_NONE, "muted")
-		view.tiles:Hide()
 	else
 		local perRow = math.max(1, math.floor((list.width + TILE_GAP) / (TILE + TILE_GAP)))
 		for index, upgrade in ipairs(upgrades) do
@@ -225,7 +211,7 @@ local function DrawList()
 		list:Put(view.tiles, math.ceil(#upgrades / perRow) * (TILE + TILE_GAP) - TILE_GAP, 6)
 	end
 	-- The producers: the ones you can see, and the next one as a shape.
-	list:Caption(L.PRODUCERS_TITLE, L.GEN_BUY_HINT, "gold")
+	list:Caption(L.PRODUCERS_TITLE)
 	view.nextReveal = nil
 	for _, generator in ipairs(ns.GENERATORS) do
 		local key = generator.key
@@ -236,17 +222,19 @@ local function DrawList()
 			spec.title = L["GEN_" .. key:upper()] .. (owned > 0 and ("   " .. U.Colorize("x" .. ns.Number(owned), 0.88, 0.85, 0.77)) or "")
 			spec.sub = owned > 0 and L.GEN_TOTAL:format(ns.Short(ns.GenTotal(key)),
 				math.floor(ns.GenTotal(key) / math.max(0.0001, ns.PerSecond()) * 100 + 0.5)) or L.GEN_EACH:format(ns.Short(ns.GenEach(key)))
-			spec.chip, spec.tone = ns.Amount("embers", ns.GenPrice(key)), Affordable(ns.GenPrice(key)) and "gold" or "red"
-			spec.bar = math.min(1, s.embers / ns.GenPrice(key))
+			local price = ns.GenPrice(key)
+			local can = Affordable(price)
+			spec.chip, spec.tone = ns.Amount("embers", price), can and "gold" or "red"
+			spec.bar = math.min(1, s.embers / price)
 			spec.tip = { L["GEN_" .. key:upper()], L["GEN_" .. key:upper() .. "_DESC"], L.GEN_EACH:format(ns.Short(ns.GenEach(key))), L.GEN_BUY_HINT }
-			spec.action = { text = L.BUY, enabled = Affordable(ns.GenPrice(key)), tip = L.GEN_BUY_HINT, fn = function() Buy(key) end }
+			spec.action = { text = L.BUY, enabled = can, tip = L.GEN_BUY_HINT, fn = function() Buy(key) end }
 		else
-			spec.title = "???"
+			spec.title = UNKNOWN or "?"
 		end
 		local row = list:Row(spec)
 		row.generator = revealed and key or nil
 		row.wandererChip, row.wandererCan = nil, nil
-		row.title.wandererTint, row.icon.texture.wandererGrey, row.bar.wandererWidth = nil, nil, nil
+		row.title.wandererTint, row.icon.texture.wandererGrey = nil, nil
 		rows[#rows + 1] = row
 		if not revealed then
 			view.nextReveal = generator.cost * ns.REVEAL
@@ -261,17 +249,30 @@ local function Draw()
 	if not view.count then return end
 	local s = ns.State()
 	if ns.CanRaise() then s.raiseSeen = s.tier end
-	-- The fire's tier, and the next.
-	local nextTier = ns.NextTier()
-	view.tier:SetText(U.Upper(ns.TierName(s.tier)) .. "  " .. U.Colorize(L.TIER_NUMBER:format(s.tier), 0.56, 0.53, 0.46))
-	view.raise:SetShown(nextTier ~= nil)
-	view.tierTrack:SetShown(nextTier ~= nil)
-	view.tierBar:SetShown(nextTier ~= nil)
-	view.why:SetShown(nextTier ~= nil)
-	if not nextTier then view.why:SetText("") end
+	-- The fire's tier.
+	view.tier:SetText(U.Upper(ns.TierName(s.tier)) .. "  " .. Skin.Colorize(L.TIER_NUMBER:format(s.tier), "muted"))
 	DrawList()
 	view.reach = Reach()
 	Live()
+	-- Those at the camp, around the fire (a new face appears softly; more than the seats: the last says how many).
+	local seat, more = 0, 0
+	for _, companion in ipairs(s.companions) do
+		if not ns.Busy(companion) and seat >= #view.sitters then more = more + 1 end
+		if not ns.Busy(companion) and seat < #view.sitters then
+			seat = seat + 1
+			local sitter = view.sitters[seat]
+			local fresh = sitter.companion ~= companion or not sitter:IsShown()
+			sitter.companion = companion
+			sitter.portrait:Set(companion, { hurt = ns.Hurt(companion) })
+			sitter:Show()
+			if fresh then ns.UI.Appear(sitter, 0.5) end
+		end
+	end
+	for index = seat + 1, #view.sitters do
+		view.sitters[index].companion = nil
+		view.sitters[index]:Hide()
+	end
+	view.sitters[#view.sitters].more = more
 end
 
 -- A gain rising from the fire where it was clicked.
@@ -318,9 +319,7 @@ local function Animate(_, elapsed)
 end
 
 -- A purchase: the counter swells a moment.
-function ns.FirePulse()
-	if not view.count then return end
-	if not view.count.SetScale then return end
+function Pulse()
 	ns.UI.Tween(view.count, 0.35, function(t) view.count:SetScale(1 + 0.12 * (1 - t)) end)
 end
 
@@ -354,11 +353,10 @@ local function Build(page)
 		shade:SetPoint(side .. "LEFT")
 		shade:SetPoint(side .. "RIGHT")
 		shade:SetHeight(side == "TOP" and 110 or 70)
-		shade:SetColorTexture(1, 1, 1, 1)
-		local dark, clear = CreateColor(0.01, 0.01, 0.03, 0.85), CreateColor(0.01, 0.01, 0.03, 0)
-		if side == "TOP" then shade:SetGradient("VERTICAL", clear, dark) else shade:SetGradient("VERTICAL", dark, clear) end
+		local dark = side == "TOP" and 0 or 0.85
+		ns.Gradient(shade, true, 0.01, 0.01, 0.03, dark, 0.01, 0.01, 0.03, 0.85 - dark)
 	end
-	Skin.Edges(art, 1, 0.82, 0, 0.25)
+	Skin.Edges(art, GOLD[1], GOLD[2], GOLD[3], 0.25)
 	-- The counters, over the night sky.
 	view.count = art:CreateFontString(nil, "OVERLAY", "GameFontNormalHuge")
 	local font = view.count:GetFont()
@@ -382,12 +380,7 @@ local function Build(page)
 	view.glow:SetVertexColor(1, 0.55, 0.15)
 	view.glow:SetAlpha(0)
 	view.flare = 0
-	view.fire:SetScript("OnEnter", function(self)
-		GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
-		GameTooltip:AddLine(L.CLICK_HINT, 1, 1, 1, true)
-		GameTooltip:Show()
-	end)
-	view.fire:SetScript("OnLeave", function() GameTooltip:Hide() end)
+	Skin.Tooltip(view.fire, L.CLICK_HINT)
 	view.fire:SetScript("OnClick", function(self)
 		local gain = ns.Click()
 		if gain <= 0 then return end
@@ -399,6 +392,29 @@ local function Build(page)
 	end)
 	art:SetScript("OnUpdate", Animate)
 	view.art = art
+	-- Those at the camp, sitting around the fire (their faces; hovered, who; clicked, their sheet).
+	view.fireX, view.fireY = width * 0.47, SCENE * 0.6
+	view.sitters = {}
+	for index = 1, #SEATS do
+		local seat = CreateFrame("Button", nil, art)
+		seat:SetSize(28, 28)
+		seat:SetFrameLevel(view.fire:GetFrameLevel() + 2)
+		seat.portrait = ns.Portrait(seat, 26, false)
+		seat.portrait:SetPoint("CENTER")
+		seat:SetPoint("CENTER", art, "TOPLEFT", view.fireX + SEATS[index][1], -(view.fireY - SEATS[index][2]))
+		seat:SetScript("OnClick", function(self)
+			Skin.Play("click")
+			if self.companion then ns.ShowPage("companion", self.companion.id) end
+		end)
+		Skin.Tooltip(seat, function(self)
+			local companion = self.companion
+			if not companion then return nil end
+			return { companion.name, ns.CompanionKind(companion) .. ", " .. L.LEVEL_SHORT:format(companion.level), ns.Hurt(companion)
+				and L.STATE_HURT:format(ns.Left(companion.hurt - time())) or L.STATE_FREE, (self.more or 0) > 0 and L.SEATS_MORE:format(self.more) or nil }
+		end)
+		seat:Hide()
+		view.sitters[index] = seat
+	end
 	-- (a new tier's name, over the scene)
 	view.burst = art:CreateFontString(nil, "OVERLAY", "GameFontNormalHuge")
 	view.burst:SetFont(view.count:GetFont(), 26, "OUTLINE")
@@ -422,21 +438,18 @@ local function Build(page)
 	view.raise:SetMotionScriptsWhileDisabled(true)
 	Skin.Tooltip(view.raise, function()
 		local s, nextTier = ns.State(), ns.NextTier()
-		if not nextTier then return nil end
 		return L.NEXT_TIER:format(ns.TierName(s.tier + 1)) .. "\n" .. L.NEXT_NEEDS:format(nextTier.level, ns.Number(nextTier.renown), ns.Short(nextTier.embers))
 	end)
 	view.tier = Skin.Text(foot, "GameTooltipTextSmall", "gold")
 	view.tier:SetPoint("TOPLEFT", foot, "TOPLEFT", 12, -6)
-	view.tierTrack = foot:CreateTexture(nil, "ARTWORK")
-	view.tierTrack:SetPoint("TOPLEFT", view.tier, "BOTTOMLEFT", 0, -5)
-	view.tierTrack:SetSize(width - 170, 5)
-	view.tierTrack:SetColorTexture(1, 1, 1, 0.12)
-	view.tierBar = foot:CreateTexture(nil, "OVERLAY")
-	view.tierBar:SetPoint("LEFT", view.tierTrack, "LEFT")
-	view.tierBar:SetHeight(5)
-	view.tierBar:SetColorTexture(1, 0.62, 0.2, 0.95)
+	view.tier:SetWidth(width - 170)
+	view.tier:SetJustifyH("LEFT")
+	if view.tier.SetWordWrap then view.tier:SetWordWrap(false) end
+	view.tierLine = ns.UI.Bar(foot, 5)
+	view.tierLine:SetPoint("TOPLEFT", view.tier, "BOTTOMLEFT", 0, -5)
+	view.tierLine:SetWidth(width - 170)
 	view.why = Skin.Text(foot, "GameTooltipTextSmall", "bad")
-	view.why:SetPoint("TOPLEFT", view.tierTrack, "BOTTOMLEFT", 0, -4)
+	view.why:SetPoint("TOPLEFT", view.tierLine, "BOTTOMLEFT", 0, -4)
 	view.why:SetWidth(width - 170)
 	if view.why.SetWordWrap then view.why:SetWordWrap(false) end
 	-- (hovered: the reason whole, when it is long)
@@ -449,7 +462,6 @@ local function Build(page)
 	view.list.scroll:ClearAllPoints()
 	view.list.scroll:SetPoint("TOPLEFT", art, "BOTTOMLEFT", 0, -8)
 	view.tiles = CreateFrame("Frame", nil, view.list)
-	view.tiles:Hide()
 end
 
 ns.AddPage("fire", L.TAB_FIRE, Build, Draw, { tab = 1, icon = "Interface\\Icons\\Spell_Fire_Fire",

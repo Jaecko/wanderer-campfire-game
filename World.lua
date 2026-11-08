@@ -1,7 +1,7 @@
 local _, ns = ...
 
 -- What the game says of your character, read only, never changed: its level, the zones it has explored (the
--- game's exploration achievement; else the zones it has been to since the camp was lit), its professions
+-- game's exploration achievement; else the zones it has been to since the addon came), its professions
 -- and their skill, its exalted factions, what it carries (bags and bank), the classes' names and colors.
 
 local W = Wanderer
@@ -29,8 +29,8 @@ end
 function ns.ZoneOpen(zone)
 	local done = AchievementDone(zone.achievement)
 	if done then return true end
-	local state = ns.State and ns.State()
-	if state and state.visited[zone.area] then return true end
+	-- (gone to: only a zone the game has no achievement for)
+	if done == nil and ns.State().visited[zone.area] then return true end
 	return false, done == nil and "visit" or "explore"
 end
 
@@ -39,26 +39,35 @@ function ns.PlaceName(area) return U.AreaName(area) or ("#" .. tostring(area)) e
 
 -- Where you stand, kept: a zone of the list entered is a zone visited.
 function ns.NoteVisit()
-	local state = ns.State and ns.State()
+	local state = ns.State()
 	local here = U.PlainName(Clean(Safe(GetRealZoneText)))
-	if not (state and here) then return end
+	if not here then return end
 	for _, zone in ipairs(ns.ZONES) do
 		if not state.visited[zone.area] and U.PlainName(U.AreaName(zone.area)) == here then state.visited[zone.area] = true end
 	end
 end
 
--- A kind of place's name (raids: a word every addon shares).
-function ns.KindName(kind) return kind == "raid" and ns.L.RAIDS or ns.L["KIND_" .. kind:upper()] end
+-- A kind of place's name (raids and dungeons: words every addon shares).
+function ns.KindName(kind) return kind == "raid" and ns.L.RAIDS or kind == "dungeon" and ns.L.DUNGEONS or ns.L["KIND_" .. kind:upper()] end
+-- One place's kind (a zone, a dungeon, a raid); a contract's reward, in words.
+function ns.KindOne(kind) return ns.L["PLACE_" .. kind:upper()] end
+function ns.ContractName(reward, desc) return ns.L["CONTRACT_" .. reward:upper() .. (desc and "_DESC" or "")] end
 
--- Every place as table rows, under its kind's title (zones, dungeons, raids); entry(place) makes each row.
-function ns.PlaceRows(entry)
+-- A place's key ("zone:12"); a place by its kind and area (open or not).
+function ns.PlaceKey(place) return place.kind .. ":" .. place.area end
+function ns.Place(kind, area)
+	for _, place in ipairs(ns.Places()) do if place.kind == kind and place.area == area then return place end end
+end
+
+-- Every place as table rows, under its kind's title (zones, dungeons, raids).
+function ns.PlaceRows()
 	local rows, kind = {}, nil
 	for _, place in ipairs(ns.Places()) do
 		if place.kind ~= kind then
 			kind = place.kind
 			rows[#rows + 1] = { header = ns.KindName(kind) }
 		end
-		rows[#rows + 1] = entry(place)
+		rows[#rows + 1] = place
 	end
 	return rows
 end
@@ -66,21 +75,17 @@ end
 -- Your professions: { key = skill } (the keys of Data.lua's PROFESSIONS).
 function ns.Professions()
 	local found = {}
-	for _, index in pairs({ Safe(GetProfessions) }) do
-		local _, _, skill, _, _, _, line = Safe(GetProfessionInfo, index)
-		local profession = ns.PROFESSIONS[Clean(line) or 0]
-		if profession then found[profession.key] = Clean(skill) or 0 end
+	for _, known in ipairs(U.Professions()) do
+		local profession = ns.PROFESSIONS[known.line or 0]
+		if profession then found[profession.key] = known.rank end
 	end
 	return found
 end
 
 -- A faction: its name, and whether your character is exalted with it.
 function ns.Faction(id)
-	local api = C_Reputation and C_Reputation.GetFactionDataByID
-	local data = api and Safe(api, id)
-	if type(data) == "table" then return Clean(data.name), Clean(data.reaction) == 8 end
-	local name, _, standing = Safe(GetFactionInfoByID, id)
-	return Clean(name), Clean(standing) == 8
+	local name, standing = U.Faction(id)
+	return name, standing == 8
 end
 
 -- How many of an item you have, bags and bank.
@@ -92,10 +97,9 @@ function ns.ClassName(file)
 	return names and names[file] or file
 end
 function ns.ClassColor(file)
-	local color = C_ClassColor and C_ClassColor.GetClassColor and Safe(C_ClassColor.GetClassColor, file)
-	color = color or (RAID_CLASS_COLORS and RAID_CLASS_COLORS[file])
-	if not color then return { 0.9, 0.88, 0.82 } end
-	return { color.r, color.g, color.b }
+	local r, g, b = U.ClassColor(file)
+	if not r then return W.Skin.COLORS.text end
+	return { r, g, b }
 end
 
 -- Your real journey, heard: a quest handed in, fish caught, a dish cooked (only while a profession's window is
@@ -131,5 +135,6 @@ function ns.ListenReal()
 				ns.Real("cook")
 			end
 		end
+		ns.SaySaid() -- (a place lived: said at once)
 	end)
 end

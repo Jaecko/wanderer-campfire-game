@@ -1,15 +1,33 @@
-# Wanderer Campfire Game 0.3.0
+# Wanderer Campfire Game 1.2.0
 
-First release, an extension of Wanderer (0.43 or later).
+Needs Wanderer 1.4 or later.
 
 ### New
-- A campfire game in a tall window, read at a glance: the fire always in sight, the tabs at the bottom (the fire, the camp, the companions, the expeditions, more), pages opened from others with their way back. Light animations and the game's own icons.
-- A clicker: stoke the fire, buy its producers, their ranks and the click's upgrades. The embers count up while you look, and the fire burns while you are away (twelve hours, more with the ashes).
-- Seven tiers of the fire; the seventh, the eternal blaze, never ends, each of its levels asking more. Very large numbers said with letters past Q (AA, AB...).
-- A new fire: once this one has grown, let it go out for its ashes. Only the fire begins again; the tier, the buildings, the companions, the expeditions and the resources stay. Each ash makes every fire after it stronger, for good, and the ashes' tree opens between two fires only.
-- Six buildings (kitchen, forge, apothecary, tents, storehouse, watchtower), the peddler and the feasts, and four resources: embers, provisions, renown, supplies.
-- Companions in the colors of WoW's classes, protectors, healers and fighters, each with a trait; they level up on the road, choose a talent at levels 20, 40 and 60, wear the gear your forge makes, and work better with those they often travel with.
-- Real-time expeditions to forty zones, nineteen dungeons and seven raids: who goes and how long, the odds, the provisions and what it should bring said before you leave. A short notice when they come back.
-- Your real journey feeds the camp: a zone opens with its exploration achievement, your level opens the fire's tiers and the dungeons, your professions strengthen the camp and fill the quartermaster's orders (goods shown from your bags or bank, never taken), each quest handed in, fish caught and dish cooked brings its share, a boss you kill in a dungeon or a raid makes it lived for good.
-- The traveler's heritage (a first camp that matches the road you have already traveled), a card of what the camp did while you were away, fireside events with choices, incidents on the road, stories over three nights, trophies in every place, feats of the camp, champions of your exalted factions.
-- In ten languages; opened from Wanderer's menu, a key of yours or /wcampfire. It gives nothing in the real game and runs nothing while its window is closed.
+- Companions with faces: each one is an NPC of the game, of a race of your faction their class allows, ringed in their class color. Their page lays them out as cards: what they do now, the road's progress, their strength, their experience.
+- A real sheet for each companion: standing in 3D (drag to turn them) between seven pieces of real game gear; their strength and item level; statistics, talents and their journey.
+- Gear found on won expeditions: uncommon in zones, rare in dungeons, epic in raids, worn at once when better, otherwise taken apart at the forge for supplies. The armory (off) keeps the pieces no one wears yet, to give to whoever they suit.
+- Threats and counters: each place holds two to four threats (spellcasters, many foes, poison, a mighty brute, curses, ambushes); companions know abilities of their class, real spells of the game, that counter some. A threat countered raises the odds.
+- The best party in one click, for the best odds or for the most experience.
+- Companions of three rarities, and a faithful companion is promoted once their level and roads allow it.
+- Contracts on the board: a road of a fixed length with its own reward once won (an epic piece, twice the experience, the next trophy, a rare recruit, three times the renown).
+- An expedition's report when it comes back: the place in its picture, victory or defeat, the experience filling up to the levels gained, the spoils, the gear found. "Same road" sends the party again.
+- The story of the road in each report: which companion held off which threat, and with what spell; which threat no one countered; and why a lost road was lost.
+- "Set out again on each return": a standing order on a place, the same party takes the same road each time it comes back, counted when you look at the camp, until someone is hurt, provisions run short or you were away longer than the fire burns.
+- A rested camp: an absence longer than the fire burns is no longer lost; the roads that leave after you come back teach 50 % more, for up to a day of roads.
+- One card when you come back to the camp: what the camp made and the expeditions back, "Collect all" in one click or the reports one by one. Space collects, 1 to 5 switch the tabs.
+- The map of the roads: the Eastern Kingdoms and Kalimdor, each party's face going along a dotted road from where you stand.
+- Three goals each week and their chest: renown, supplies and a rare piece.
+- The companions at camp sit around the fire; the buildings as cards; the trophies as a cabinet, a shelf for each place.
+- WoW Forever's own places open to expeditions: Zephras Isle, the Riverglades, Shen'dralas, Mount Hyjal, the Hall of Thanes, the Ruins of Lordaeron, the Wetlands Excavation Site and the City of Dalaran.
+
+### Changed
+- No more pressure to log in: a contract you have seen stays on the board until you take it; a week's chest not opened stays yours the week after; a candidate you like can be kept through the next draws (one at most).
+- The notice of an expedition back waits during a fight or inside a dungeon, then comes once for all of them.
+- Wanderer's menu says what waits at camp (an order, an event, the week's chest, a talent) and when the first expedition comes back.
+- Faster levels: longer roads and higher places teach more, and a companion below the place learns much more once it is won.
+- The last tab is the Chronicle: the road, the orders, the trophies, the feats.
+
+### Fixed
+- One timer waits for the next expedition's return, not one more at every look.
+- Long numbers and names no longer run into their neighbors.
+- A save of an older version without an expedition's chance no longer stops its return.

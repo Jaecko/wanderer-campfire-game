@@ -7,19 +7,19 @@ local _, ns = ...
 
 local HOUR = 3600
 
--- The fire, tier by tier: the level your character needs, what it costs to build (renown, embers), the
--- embers its own small flame makes an hour (rate; cap: read no more), the
--- companions it shelters, the expeditions at once, the most companions on one expedition.
+-- The fire, tier by tier: the level your character needs, what it costs to build (renown, embers), the embers
+-- its own small flame makes an hour, the companions it shelters, the expeditions at once, the most companions
+-- on one expedition.
 -- (balanced by simulated playthroughs of 30 days: the clicker makes billions by the second day, so the
 -- embers of the later tiers are counted in trillions; renown grows with the expeditions of each tier)
 ns.TIERS = {
-	{ level = 1, renown = 0, embers = 0, rate = 60, cap = 600, companions = 4, slots = 1, party = 2 },
-	{ level = 10, renown = 60, embers = 2000, rate = 120, cap = 2500, companions = 5, slots = 2, party = 3 },
-	{ level = 20, renown = 400, embers = 5e11, rate = 240, cap = 7500, companions = 6, slots = 2, party = 5 },
-	{ level = 30, renown = 5000, embers = 1e14, rate = 420, cap = 20000, companions = 8, slots = 3, party = 5 },
-	{ level = 45, renown = 25000, embers = 2e15, rate = 660, cap = 50000, companions = 10, slots = 4, party = 5 },
-	{ level = 55, renown = 45000, embers = 1.5e16, rate = 960, cap = 60000, companions = 12, slots = 5, party = 10 },
-	{ level = 60, renown = 80000, embers = 3e16, rate = 1300, cap = 70000, companions = 12, slots = 5, party = 10 },
+	{ level = 1, renown = 0, embers = 0, rate = 60, companions = 4, slots = 1, party = 2 },
+	{ level = 10, renown = 60, embers = 2000, rate = 120, companions = 5, slots = 2, party = 3 },
+	{ level = 20, renown = 400, embers = 5e11, rate = 240, companions = 6, slots = 2, party = 5 },
+	{ level = 30, renown = 5000, embers = 1e14, rate = 420, companions = 8, slots = 3, party = 5 },
+	{ level = 45, renown = 25000, embers = 2e15, rate = 660, companions = 10, slots = 4, party = 5 },
+	{ level = 55, renown = 45000, embers = 1.5e16, rate = 960, companions = 12, slots = 5, party = 10 },
+	{ level = 60, renown = 80000, embers = 3e16, rate = 1300, companions = 12, slots = 5, party = 10 },
 }
 -- The seventh tier, the eternal blaze, never ends: each of its levels (II, III...) asks so many times the
 -- embers and the renown of the one before; it shelters no more companions, it makes more (TIER_BONUS).
@@ -35,6 +35,10 @@ ns.ORDER_LIFE = 24 * HOUR -- an order not honored leaves the board after this
 ns.ORDER_AGAIN = 2 * HOUR -- an honored order's place takes a new one after this
 ns.CANDIDATES_EVERY = 4 * HOUR -- new candidates around the fire
 ns.LOG_KEPT = 30 -- the last expeditions told
+-- The camp's rest: the time an absence lasted past the fire's own hours, kept as minutes of roads that teach
+-- more (REST_XP more experience), REST_MAX at most; spent by the roads that leave after you come back.
+ns.REST_XP, ns.REST_MAX = 0.5, 24 * 60
+ns.AGAIN_MAX = 200 -- a standing order's returns counted in one look, at most (a safety: provisions stop it first)
 
 -- The buildings: each up to the fire's tier; what a level costs (embers, supplies, both growing) and does.
 ns.BUILDINGS = {
@@ -50,7 +54,7 @@ ns.BUILDING_SCALE = 40 -- (the clicker's scale: the embers of a level, so many t
 
 -- The clicker ---------------------------------------------------------------------------------------------
 -- What keeps the fire burning, bought with embers: each makes so many embers a second; its price grows with
--- each one bought (GENERATOR_GROWTH). A producer shows once you have held a share of its price (REVEAL).
+-- each one bought (GENERATOR_GROWTH). A producer shows once this fire has made a share of its price (REVEAL).
 ns.GENERATORS = {
 	{ key = "twigs", cost = 15, rate = 0.1, icon = "Interface\\Icons\\Spell_Fire_Fire" },
 	{ key = "woodcutter", cost = 100, rate = 1, icon = "Interface\\Icons\\INV_Axe_02" },
@@ -64,7 +68,7 @@ ns.GENERATORS = {
 ns.GENERATOR_GROWTH = 1.15
 ns.REVEAL = 0.4
 ns.GENERATOR = {}
-for index, generator in ipairs(ns.GENERATORS) do generator.index = index ns.GENERATOR[generator.key] = generator end
+for _, generator in ipairs(ns.GENERATORS) do ns.GENERATOR[generator.key] = generator end
 -- A producer's ranks: once so many are owned, a rank doubles what each makes (bought for so many times the
 -- producer's first price).
 -- (then, past the last, one more every RANK_EVERY owned, RANK_PRICE times dearer each)
@@ -83,14 +87,10 @@ ns.CLICK_UPGRADES = {
 -- (then, without end, a living ember: a share more of what the fire makes, CLICK_PRICE times dearer each)
 ns.CLICK_EMBER = { share = 0.05, icon = "Interface\\Icons\\Spell_Fire_Fire" }
 ns.CLICK_PRICE = 1000
--- A real campfire of the game: its warmth (the "Cozy Fire" aura) makes the camp give more, and each piece of
--- furniture set around it (by the auras it gives) more still.
+-- A real campfire of the game: its warmth (the "Cozy Fire" aura) makes the camp give more.
 ns.HEARTH_AURAS = { 7353 } -- Cozy Fire
-ns.FURNITURE_AURAS = {} -- (filled as they are known)
 ns.HEARTH_BONUS = 0.5
-ns.FURNITURE_BONUS = 0.15
-ns.FURNITURE_MAX = 4
-ns.CLICK_REVEAL = 0.3 -- a click's upgrade shows once you have held this share of its price
+ns.CLICK_REVEAL = 0.3 -- a click's upgrade shows once this fire has made this share of its price
 ns.COMPANION_BONUS = 0.05 -- each companion at the fire: so much more made
 ns.TIER_BONUS = 0.25 -- each tier of the fire beyond the first: so much more made, and the click as much
 ns.EXPEDITION_SHARE = 15 -- an expedition won brings what the fire makes in so many seconds, for each of its minutes
@@ -109,7 +109,7 @@ ns.TRADE_HALF_LIFE = 6 * 3600
 ns.QUEST_SHARE = 30 -- a quest handed in: what the fire makes in so many seconds
 ns.BUILDING_MAX = 5
 ns.BUILDING = {} -- by key
-for index, building in ipairs(ns.BUILDINGS) do building.index = index ns.BUILDING[building.key] = building end
+for _, building in ipairs(ns.BUILDINGS) do ns.BUILDING[building.key] = building end
 
 -- The game's classes (their file names: their colors and icons come from the game) and the roles each may hold.
 ns.CLASSES = {
@@ -123,8 +123,6 @@ ns.CLASSES = {
 	{ file = "WARLOCK", roles = { "dps" } },
 	{ file = "DRUID", roles = { "tank", "heal", "dps" } },
 }
-ns.CLASS = {}
-for _, class in ipairs(ns.CLASSES) do ns.CLASS[class.file] = class end
 
 -- The traits a companion may have, each with what it changes (Game.lua reads them).
 ns.TRAITS = {
@@ -139,93 +137,155 @@ ns.TRAITS = {
 }
 ns.TRAIT_KEYS = { "careful", "tracker", "sturdy", "lucky", "swift", "frugal", "valiant", "learned" }
 
--- Companions' names (the same in every language).
-ns.NAMES = {
-	"Aldric", "Brenna", "Caelan", "Dorna", "Edric", "Fenna", "Garrick", "Hilde", "Ivor", "Jessa", "Kael", "Lira",
-	"Marek", "Nessa", "Orrin", "Perra", "Quill", "Rhosyn", "Soren", "Talia", "Ulric", "Vessa", "Wren", "Yorrick",
-	"Zara", "Bram", "Cora", "Dalen", "Elowen", "Fargus", "Grenna", "Halvar", "Isolde", "Joren", "Kestra", "Lothar",
-	"Mira", "Norwin", "Odessa", "Pellam", "Runa", "Sigrid", "Tobin", "Una", "Varek", "Willa", "Brannoc", "Eira",
-	"Thorn", "Maelis", "Corwin", "Saela", "Grom", "Ysolde", "Durgan", "Liesl", "Hakon", "Nym", "Rowan", "Tamsin",
+-- Companions' names (the same in every language), his and hers.
+ns.NAMES_MALE = {
+	"Aldric", "Caelan", "Edric", "Garrick", "Ivor", "Kael", "Marek", "Orrin", "Quill", "Soren", "Ulric", "Yorrick",
+	"Bram", "Dalen", "Fargus", "Halvar", "Joren", "Lothar", "Norwin", "Pellam", "Tobin", "Varek", "Brannoc", "Thorn",
+	"Corwin", "Grom", "Durgan", "Hakon", "Rowan", "Alaric", "Benedek", "Cedric", "Dunstan", "Eamon", "Gideon", "Osric",
 }
+ns.NAMES_FEMALE = {
+	"Brenna", "Dorna", "Fenna", "Hilde", "Jessa", "Lira", "Nessa", "Perra", "Rhosyn", "Talia", "Vessa", "Wren",
+	"Zara", "Cora", "Elowen", "Grenna", "Isolde", "Kestra", "Mira", "Odessa", "Runa", "Sigrid", "Una", "Willa",
+	"Eira", "Maelis", "Saela", "Ysolde", "Liesl", "Nym", "Tamsin", "Aveline", "Briony", "Ilsa", "Maren", "Seren",
+}
+
+-- Who a companion is: the races a class may be (the game's race ids), those of each faction; the armor a class
+-- wears (the best from its level: plate and mail from 40, as in the game), its weapons. Their faces and gear
+-- come from the game (LookData.lua, GearData.lua: made by build_campfire.js).
+ns.FACTION_RACES = { Alliance = { 1, 3, 4, 7 }, Horde = { 2, 5, 6, 8 } }
+ns.CLASS_RACES = {
+	WARRIOR = { 1, 2, 3, 4, 5, 6, 7, 8 }, PALADIN = { 1, 3 }, HUNTER = { 2, 3, 4, 6, 8 }, ROGUE = { 1, 2, 3, 4, 5, 7, 8 },
+	PRIEST = { 1, 3, 4, 5, 8 }, SHAMAN = { 2, 6, 8 }, MAGE = { 1, 5, 7, 8 }, WARLOCK = { 1, 2, 5, 7 }, DRUID = { 4, 6 },
+}
+ns.CLASS_ARMOR = {
+	WARRIOR = { { "plate", 40 }, { "mail", 1 } }, PALADIN = { { "plate", 40 }, { "mail", 1 } },
+	HUNTER = { { "mail", 40 }, { "leather", 1 } }, SHAMAN = { { "mail", 40 }, { "leather", 1 } },
+	ROGUE = { { "leather", 1 } }, DRUID = { { "leather", 1 } },
+	PRIEST = { { "cloth", 1 } }, MAGE = { { "cloth", 1 } }, WARLOCK = { { "cloth", 1 } },
+}
+ns.CLASS_WEAPONS = {
+	WARRIOR = { "sword2", "axe2", "mace2", "polearm", "sword", "axe" }, PALADIN = { "mace2", "sword2", "mace", "sword" },
+	HUNTER = { "bow", "gun", "crossbow" }, ROGUE = { "dagger", "sword", "fist" }, PRIEST = { "staff", "mace" },
+	SHAMAN = { "mace", "staff", "axe", "mace2" }, MAGE = { "staff", "dagger", "sword" }, WARLOCK = { "staff", "dagger", "sword" },
+	DRUID = { "staff", "mace2", "dagger" },
+}
+-- The seven pieces a companion wears (head, shoulders, chest, hands, legs, feet, a weapon).
+ns.SLOTS = { "head", "shoulder", "chest", "hands", "legs", "feet", "weapon" }
+-- Their gear: each item level above their own level and five makes them 1.2 % stronger (as much weaker below;
+-- 15 % weaker, 40 % stronger at most); an empty slot counts as gear ten levels below theirs.
+ns.GEAR_ILVL, ns.GEAR_LOW, ns.GEAR_HIGH = 0.012, -0.15, 0.4
+-- Gear found on a won expedition: the odds for an hour away (more when longer), its quality (uncommon in zones,
+-- rare in dungeons, epic in raids); a piece no better than what is worn, and one a better piece replaces, goes
+-- to the armory when it keeps them, else to the forge (supplies).
+ns.FIND = { zone = { chance = 0.35, quality = 2 }, dungeon = { chance = 0.7, quality = 3 }, raid = { chance = 0.9, quality = 4, pieces = 2 } }
+
+-- Experience, as the missions of the followers: each minute away brings some (more in a place of a higher level,
+-- in dungeons and raids, a little more again on long roads); a companion below the place learns more (8 % for
+-- each level below, three times at most) once it is won, one above learns less (a fifth at least). A party
+-- whose strongest, at 90 %, is stronger than its mean is carried by that one: its odds are those of 90 % of it.
+ns.XP_PER_MINUTE, ns.XP_PLACE = 2, 0.25
+ns.XP_KIND = { zone = 1, dungeon = 1.3, raid = 1.6 }
+ns.XP_LONG = 2880 -- (twelve hours: a quarter more)
+ns.XP_BELOW, ns.XP_BELOW_MAX, ns.XP_ABOVE, ns.XP_ABOVE_MIN = 0.08, 3, 0.08, 0.2
+ns.XP_LOST = 0.3
+ns.CARRY = 0.9
 
 -- The expeditions' durations, in minutes (zones; dungeons; raids).
 ns.DURATIONS = { zone = { 15, 60, 240, 480, 720 }, dungeon = { 120, 360, 720 }, raid = { 720, 1440 } } -- (12 h: a night)
 
--- The zones: their area (its name), the exploration achievement that opens them, their levels.
+-- The zones: their area (its name), the exploration achievement that opens them (none: going there does);
+-- their levels come from Wanderer (below). WoW Forever's own zones among them (areas and achievements from its tables).
 ns.ZONES = {
-	{ area = 12, achievement = 776, low = 1, high = 10 }, -- Elwynn Forest
-	{ area = 1, achievement = 627, low = 1, high = 10 }, -- Dun Morogh
-	{ area = 141, achievement = 842, low = 1, high = 10 }, -- Teldrassil
-	{ area = 14, achievement = 728, low = 1, high = 10 }, -- Durotar
-	{ area = 215, achievement = 736, low = 1, high = 10 }, -- Mulgore
-	{ area = 85, achievement = 768, low = 1, high = 10 }, -- Tirisfal Glades
-	{ area = 40, achievement = 802, low = 10, high = 20 }, -- Westfall
-	{ area = 38, achievement = 779, low = 10, high = 20 }, -- Loch Modan
-	{ area = 148, achievement = 844, low = 10, high = 20 }, -- Darkshore
-	{ area = 130, achievement = 769, low = 10, high = 20 }, -- Silverpine Forest
-	{ area = 17, achievement = 750, low = 10, high = 25 }, -- The Barrens
-	{ area = 44, achievement = 780, low = 15, high = 25 }, -- Redridge Mountains
-	{ area = 406, achievement = 847, low = 15, high = 27 }, -- Stonetalon Mountains
-	{ area = 10, achievement = 778, low = 18, high = 30 }, -- Duskwood
-	{ area = 331, achievement = 845, low = 18, high = 30 }, -- Ashenvale
-	{ area = 11, achievement = 841, low = 20, high = 30 }, -- Wetlands
-	{ area = 267, achievement = 772, low = 20, high = 30 }, -- Hillsbrad Foothills
-	{ area = 400, achievement = 846, low = 25, high = 35 }, -- Thousand Needles
-	{ area = 36, achievement = 760, low = 30, high = 40 }, -- Alterac Mountains
-	{ area = 45, achievement = 761, low = 30, high = 40 }, -- Arathi Highlands
-	{ area = 405, achievement = 848, low = 30, high = 40 }, -- Desolace
-	{ area = 33, achievement = 781, low = 30, high = 45 }, -- Stranglethorn Vale
-	{ area = 15, achievement = 850, low = 35, high = 45 }, -- Dustwallow Marsh
-	{ area = 3, achievement = 765, low = 35, high = 45 }, -- Badlands
-	{ area = 8, achievement = 782, low = 35, high = 45 }, -- Swamp of Sorrows
-	{ area = 357, achievement = 849, low = 40, high = 50 }, -- Feralas
-	{ area = 47, achievement = 773, low = 40, high = 50 }, -- The Hinterlands
-	{ area = 440, achievement = 851, low = 40, high = 50 }, -- Tanaris
-	{ area = 51, achievement = 774, low = 43, high = 50 }, -- Searing Gorge
-	{ area = 16, achievement = 852, low = 45, high = 55 }, -- Azshara
-	{ area = 4, achievement = 766, low = 45, high = 55 }, -- Blasted Lands
-	{ area = 490, achievement = 854, low = 48, high = 55 }, -- Un'Goro Crater
-	{ area = 361, achievement = 853, low = 48, high = 55 }, -- Felwood
-	{ area = 46, achievement = 775, low = 50, high = 58 }, -- Burning Steppes
-	{ area = 28, achievement = 770, low = 51, high = 58 }, -- Western Plaguelands
-	{ area = 139, achievement = 771, low = 53, high = 60 }, -- Eastern Plaguelands
-	{ area = 618, achievement = 857, low = 55, high = 60 }, -- Winterspring
-	{ area = 41, achievement = 777, low = 55, high = 60 }, -- Deadwind Pass
-	{ area = 493, achievement = 855, low = 55, high = 60 }, -- Moonglade
-	{ area = 1377, achievement = 856, low = 55, high = 60 }, -- Silithus
+	{ area = 12, achievement = 776 }, -- Elwynn Forest
+	{ area = 1, achievement = 627 }, -- Dun Morogh
+	{ area = 141, achievement = 842 }, -- Teldrassil
+	{ area = 14, achievement = 728 }, -- Durotar
+	{ area = 215, achievement = 736 }, -- Mulgore
+	{ area = 85, achievement = 768 }, -- Tirisfal Glades
+	{ area = 16593 }, -- Zephras Isle (Forever)
+	{ area = 40, achievement = 802 }, -- Westfall
+	{ area = 38, achievement = 779 }, -- Loch Modan
+	{ area = 148, achievement = 844 }, -- Darkshore
+	{ area = 130, achievement = 769 }, -- Silverpine Forest
+	{ area = 17, achievement = 750 }, -- The Barrens
+	{ area = 44, achievement = 780 }, -- Redridge Mountains
+	{ area = 406, achievement = 847 }, -- Stonetalon Mountains
+	{ area = 10, achievement = 778 }, -- Duskwood
+	{ area = 331, achievement = 845 }, -- Ashenvale
+	{ area = 11, achievement = 841 }, -- Wetlands
+	{ area = 267, achievement = 772 }, -- Hillsbrad Foothills
+	{ area = 400, achievement = 846 }, -- Thousand Needles
+	{ area = 36, achievement = 760 }, -- Alterac Mountains
+	{ area = 45, achievement = 761 }, -- Arathi Highlands
+	{ area = 405, achievement = 848 }, -- Desolace
+	{ area = 33, achievement = 781 }, -- Stranglethorn Vale
+	{ area = 15, achievement = 850 }, -- Dustwallow Marsh
+	{ area = 16591, achievement = 62354 }, -- Riverglades (Forever)
+	{ area = 3, achievement = 765 }, -- Badlands
+	{ area = 8, achievement = 782 }, -- Swamp of Sorrows
+	{ area = 16651, achievement = 63684 }, -- Shen'dralas (Forever)
+	{ area = 357, achievement = 849 }, -- Feralas
+	{ area = 47, achievement = 773 }, -- The Hinterlands
+	{ area = 440, achievement = 851 }, -- Tanaris
+	{ area = 51, achievement = 774 }, -- Searing Gorge
+	{ area = 16, achievement = 852 }, -- Azshara
+	{ area = 4, achievement = 766 }, -- Blasted Lands
+	{ area = 490, achievement = 854 }, -- Un'Goro Crater
+	{ area = 361, achievement = 853 }, -- Felwood
+	{ area = 46, achievement = 775 }, -- Burning Steppes
+	{ area = 28, achievement = 770 }, -- Western Plaguelands
+	{ area = 139, achievement = 771 }, -- Eastern Plaguelands
+	{ area = 618, achievement = 857 }, -- Winterspring
+	{ area = 41, achievement = 777 }, -- Deadwind Pass
+	{ area = 493, achievement = 855 }, -- Moonglade
+	{ area = 1377, achievement = 856 }, -- Silithus
+	{ area = 616, achievement = 62356 }, -- Mount Hyjal (Forever)
 }
 
--- The dungeons (opened by your level) and the raids (your level 60 and a fire whose expeditions take ten).
+-- The dungeons (opened by your level and a fire whose expeditions take five) and the raids (your level 60 and a
+-- fire whose expeditions take ten).
 ns.DUNGEONS = {
-	{ area = 2437, low = 13, high = 18 }, -- Ragefire Chasm
-	{ area = 718, low = 17, high = 24 }, -- Wailing Caverns
-	{ area = 1581, low = 17, high = 26 }, -- The Deadmines
-	{ area = 209, low = 22, high = 30 }, -- Shadowfang Keep
-	{ area = 719, low = 24, high = 32 }, -- Blackfathom Deeps
-	{ area = 717, low = 24, high = 32 }, -- The Stockade
-	{ area = 133, low = 29, high = 38 }, -- Gnomeregan
-	{ area = 1717, low = 30, high = 40 }, -- Razorfen Kraul
-	{ area = 796, low = 34, high = 45 }, -- Scarlet Monastery
-	{ area = 722, low = 40, high = 50 }, -- Razorfen Downs
-	{ area = 1517, low = 41, high = 51 }, -- Uldaman
-	{ area = 978, low = 44, high = 54 }, -- Zul'Farrak
-	{ area = 2100, low = 46, high = 55 }, -- Maraudon
-	{ area = 1417, low = 50, high = 56 }, -- The Temple of Atal'Hakkar
-	{ area = 1584, low = 52, high = 60 }, -- Blackrock Depths
-	{ area = 1583, low = 55, high = 60 }, -- Blackrock Spire
-	{ area = 2557, low = 56, high = 60 }, -- Dire Maul
-	{ area = 2017, low = 58, high = 60 }, -- Stratholme
-	{ area = 2057, low = 58, high = 60 }, -- Scholomance
+	{ area = 2437 }, -- Ragefire Chasm
+	{ area = 16919 }, -- The Hall of Thanes (Forever)
+	{ area = 16611 }, -- Ruins of Lordaeron (Forever)
+	{ area = 718 }, -- Wailing Caverns
+	{ area = 1581 }, -- The Deadmines
+	{ area = 209 }, -- Shadowfang Keep
+	{ area = 719 }, -- Blackfathom Deeps
+	{ area = 717 }, -- The Stockade
+	{ area = 16732 }, -- Excavation Site: Wetlands (Forever)
+	{ area = 16544 }, -- City of Dalaran (Forever)
+	{ area = 133 }, -- Gnomeregan
+	{ area = 1717 }, -- Razorfen Kraul
+	{ area = 796 }, -- Scarlet Monastery
+	{ area = 722 }, -- Razorfen Downs
+	{ area = 1517 }, -- Uldaman
+	{ area = 978 }, -- Zul'Farrak
+	{ area = 2100 }, -- Maraudon
+	{ area = 1417 }, -- The Temple of Atal'Hakkar
+	{ area = 1584 }, -- Blackrock Depths
+	{ area = 1583 }, -- Blackrock Spire
+	{ area = 2557 }, -- Dire Maul
+	{ area = 2017 }, -- Stratholme
+	{ area = 2057 }, -- Scholomance
 }
 ns.RAIDS = {
-	{ area = 1977, low = 60, high = 62 }, -- Zul'Gurub
-	{ area = 3429, low = 60, high = 62 }, -- Ruins of Ahn'Qiraj
-	{ area = 2717, low = 60, high = 63 }, -- Molten Core
-	{ area = 2159, low = 60, high = 63 }, -- Onyxia's Lair
-	{ area = 2677, low = 60, high = 65 }, -- Blackwing Lair
-	{ area = 3428, low = 60, high = 67 }, -- Temple of Ahn'Qiraj
-	{ area = 3456, low = 60, high = 70 }, -- Naxxramas
+	{ area = 1977 }, -- Zul'Gurub
+	{ area = 3429 }, -- Ruins of Ahn'Qiraj
+	{ area = 2717 }, -- Molten Core
+	{ area = 2159 }, -- Onyxia's Lair
+	{ area = 2677 }, -- Blackwing Lair
+	{ area = 3428 }, -- Temple of Ahn'Qiraj
+	{ area = 3456 }, -- Naxxramas
 }
+-- (the levels are the world's, kept by Wanderer for every addon: read there once, at load)
+local shared = Wanderer and Wanderer.ZoneLevels
+for _, list in ipairs(shared and { ns.ZONES, ns.DUNGEONS, ns.RAIDS } or {}) do
+	for _, place in ipairs(list) do
+		local levels = shared(place.area)
+		if levels then place.low, place.high = levels.low, levels.high end
+	end
+end
 ns.PARTY = { dungeon = 5, raid = 10 }
 ns.REWARD_SCALE = { zone = 1, dungeon = 2.5, raid = 6 }
 
@@ -282,20 +342,20 @@ ns.CHAMPIONS = {
 }
 
 -- The fireside events: two choices each, and what each brings (resources, a companion's experience or
--- hurt, a trophy). Their words: EVENT_<key>, EVENT_<key>_A/_B (the choices), EVENT_<key>_A_DONE/_B_DONE.
+-- hurt, a trophy). Their words: EVENT_<key>, EVENT_<key>_A/_B (the choices).
 ns.EVENTS = {
 	{ key = "peddler", a = { embers = -150, supplies = 3 }, b = { renown = 5 } },
 	{ key = "wounded", a = { provisions = -40, renown = 25 }, b = { embers = 60 } },
 	{ key = "rumor", a = { trophy = 0.6, injury = true }, b = { xp = 120 } },
 	{ key = "storm", a = { embers = -100, provisions = 30 }, b = { provisions = -50 } },
-	{ key = "bard", a = { embers = -50, renown = 20 }, b = { xp = 80 } },
+	{ key = "bard", a = { embers = -50, renown = 20, next = "bard2" }, b = { xp = 80 } },
 	{ key = "wolves", a = { injury = true, provisions = 60 }, b = { provisions = -30 } },
 	{ key = "pilgrim", a = { provisions = -30, renown = 30 }, b = { embers = 40 } },
 	{ key = "cache", a = { supplies = 4, injury = true }, b = { embers = 120 } },
 	{ key = "stars", a = { xp = 150 }, b = { embers = 150 } },
 	{ key = "rival", a = { renown = 40, injury = true }, b = { renown = -10, supplies = 2 } },
 	{ key = "feast", a = { provisions = -60, xpAll = 60 }, b = { provisions = 20 } },
-	{ key = "lost", a = { provisions = -20, recruit = true }, b = { renown = 5 } },
+	{ key = "lost", a = { provisions = -20, next = "lost2" }, b = { renown = 5 } },
 	{ key = "relic", a = { embers = -200, trophy = 1 }, b = { supplies = 2 } },
 	{ key = "spring", a = { heal = true }, b = { provisions = 40 } },
 }
@@ -308,8 +368,9 @@ ns.TROPHY_CHANCES = { 0.15, 0.05, 0.012 }
 ns.TROPHY_BONUS = 0.02 -- more brought back, for every ten trophies
 
 -- Talents: at levels 20, 40 and 60 a companion chooses one of two, by its role. What each changes: power (its
--- strength), success (the expedition's odds), injury (its wounds shorter), partyInjury (everyone's), rewards
--- (more brought back), trophy, duration (shorter), provisions (eaten less), partyXp (everyone learns faster).
+-- strength), hardPower (stronger where it is hard), success (the expedition's odds), partyInjury (everyone's
+-- wounds shorter), rewards (more brought back), trophy, duration (shorter), provisions (eaten less), partyXp
+-- (everyone learns faster).
 ns.TALENT_LEVELS = { 20, 40, 60 }
 ns.TALENTS = {
 	tank = {
@@ -363,9 +424,8 @@ ns.CHAIN_EVENTS = {
 	{ key = "bard2", a = { renown = 30, next = "bard3" }, b = { embers = 60 } },
 	{ key = "bard3", a = { renown = 80, xpAll = 80 }, b = { supplies = 4 } },
 	{ key = "lost2", a = { provisions = -30, next = "lost3" }, b = { renown = 10 } },
-	{ key = "lost3", a = { recruit = true, renown = 40 }, b = { supplies = 3 } },
+	{ key = "lost3", a = { recruit = true, sex = 1, renown = 40 }, b = { supplies = 3 } }, -- (she joins: a woman)
 }
-ns.EVENT.bard.a.next, ns.EVENT.lost.a.next = "bard2", "lost2"
 for _, list in ipairs({ ns.ROAD_EVENTS, ns.CHAIN_EVENTS }) do
 	for _, event in ipairs(list) do ns.EVENT[event.key] = event end
 end
@@ -393,9 +453,9 @@ ns.FEATS = {
 	{ key = "again", prestige = 1, renown = 500 },
 }
 
--- A new start, from the outpost: the camp begins again, its trophies, feats and champions kept, and each new
--- start makes the fire burn and the roads give 10 % more for good.
-ns.PRESTIGE_BONUS = 0.1 -- (the new starts of older versions, the whole camp begun again: their bonus kept)
+-- The new starts of older versions (the whole camp begun again): each still makes the fire burn and the roads
+-- give 10 % more, for good.
+ns.PRESTIGE_BONUS = 0.1
 
 -- A new fire (rekindled, the Ashes' page): only the clicker begins again (embers, producers, their ranks, the
 -- click's upgrades); the tier, the buildings, the companions, the expeditions and every other resource stay.
@@ -413,6 +473,85 @@ ns.ASH_TREE = {
 	{ key = "peddler", cost = 3, growth = 2, icon = "Interface\\Icons\\INV_Misc_Coin_02" }, -- trades 8 % cheaper (of what is left)
 }
 ns.ASH = {}
-for index, node in ipairs(ns.ASH_TREE) do node.index = index ns.ASH[node.key] = node end
+for _, node in ipairs(ns.ASH_TREE) do ns.ASH[node.key] = node end
 ns.KINDLING = { twigs = 10, woodcutter = 5, charcoal = 2 } -- a new fire's producers, for each level of kindling
 ns.FERVOR, ns.MEMORY, ns.SLUMBER, ns.PEDDLER, ns.BREATH = 0.15, 0.08, 2 * HOUR, 0.08, 0.5
+
+-- Threats and counters, as the missions of the followers: each place holds a few threats (two in a zone, three
+-- in a dungeon, four in a raid, always the same for a place); each companion knows abilities of their class (a
+-- spell of the game: its name and icon come from it), each countering one threat. A threat countered adds to
+-- the odds, one left open takes from them.
+ns.THREATS = {
+	{ key = "magic", icon = "Interface\\Icons\\Spell_Holy_DispelMagic" },
+	{ key = "swarm", icon = "Interface\\Icons\\Ability_Warrior_Cleave" },
+	{ key = "poison", icon = "Interface\\Icons\\Spell_Nature_CorrosiveBreath" },
+	{ key = "brute", icon = "Interface\\Icons\\Ability_Warrior_Sunder" },
+	{ key = "curse", icon = "Interface\\Icons\\Spell_Shadow_CurseOfSargeras" },
+	{ key = "ambush", icon = "Interface\\Icons\\Ability_Ambush" },
+}
+ns.THREAT = {}
+for _, threat in ipairs(ns.THREATS) do ns.THREAT[threat.key] = threat end
+ns.THREAT_COUNT = { zone = 2, dungeon = 3, raid = 4 }
+ns.THREAT_COVERED, ns.THREAT_OPEN = 0.06, 0.06
+ns.ABILITIES = {
+	WARRIOR = { { spell = 355, counters = "brute" }, { spell = 845, counters = "swarm" }, { spell = 72, counters = "magic" } }, -- Taunt, Cleave, Shield Bash
+	PALADIN = { { spell = 1152, counters = "poison" }, { spell = 4987, counters = "magic" }, { spell = 853, counters = "brute" } }, -- Purify, Cleanse, Hammer of Justice
+	HUNTER = { { spell = 1543, counters = "ambush" }, { spell = 2643, counters = "swarm" }, { spell = 5116, counters = "brute" } }, -- Flare, Multi-Shot, Concussive Shot
+	ROGUE = { { spell = 6770, counters = "ambush" }, { spell = 1766, counters = "magic" }, { spell = 408, counters = "brute" } }, -- Sap, Kick, Kidney Shot
+	PRIEST = { { spell = 527, counters = "magic" }, { spell = 8122, counters = "brute" }, { spell = 15237, counters = "swarm" } }, -- Dispel Magic, Psychic Scream, Holy Nova
+	SHAMAN = { { spell = 526, counters = "poison" }, { spell = 421, counters = "swarm" }, { spell = 370, counters = "magic" } }, -- Cure Poison, Chain Lightning, Purge
+	MAGE = { { spell = 475, counters = "curse" }, { spell = 1449, counters = "swarm" }, { spell = 2139, counters = "magic" } }, -- Remove Lesser Curse, Arcane Explosion, Counterspell
+	WARLOCK = { { spell = 5782, counters = "brute" }, { spell = 126, counters = "ambush" }, { spell = 1949, counters = "swarm" } }, -- Fear, Eye of Kilrogg, Hellfire
+	DRUID = { { spell = 2782, counters = "curse" }, { spell = 8946, counters = "poison" }, { spell = 339, counters = "brute" } }, -- Remove Curse, Cure Poison, Entangling Roots
+}
+
+-- A companion's rarity (the game's item qualities: uncommon, rare, epic): its abilities, a little more strength
+-- and learning. Recruits are drawn uncommon mostly (your tailors and leatherworkers make rarer ones come); a
+-- faithful companion is promoted once their level and roads allow it, for renown and supplies.
+ns.RARITY = {
+	[2] = { abilities = 1, power = 0, xp = 0 },
+	[3] = { abilities = 2, power = 0.05, xp = 0.1 },
+	[4] = { abilities = 3, power = 0.1, xp = 0.2 },
+}
+ns.RARITY_ODDS = { epic = 0.05, rare = 0.25 }
+ns.PROMOTE = {
+	[3] = { level = 25, roads = 10, renown = 300, supplies = 20 },
+	[4] = { level = 50, roads = 40, renown = 2500, supplies = 80 },
+}
+
+-- Contracts: a few roads on the board (one more every six hours, in a free seat or for one not seen yet: a
+-- contract seen stays until it is taken), of a fixed length, each with a reward of
+-- its own once won: an epic piece, twice the experience, the place's next trophy, a rare recruit, three times
+-- the renown.
+ns.CONTRACTS, ns.CONTRACT_EVERY = 3, 6 * HOUR
+ns.CONTRACT_REWARDS = {
+	{ key = "epic", icon = "Interface\\Icons\\INV_Chest_Plate04" },
+	{ key = "xp", icon = "Interface\\Icons\\Spell_Holy_SurgeOfLight" },
+	{ key = "trophy", icon = "Interface\\Icons\\INV_Misc_Gem_Pearl_04" },
+	{ key = "recruit", icon = "Interface\\Icons\\INV_Misc_GroupNeedMore" },
+	{ key = "renown", icon = "Interface\\Icons\\INV_Banner_02" },
+}
+ns.CONTRACT_REWARD = {}
+for _, reward in ipairs(ns.CONTRACT_REWARDS) do ns.CONTRACT_REWARD[reward.key] = reward end
+ns.CONTRACT_MINUTES = { zone = 240, dungeon = 360, raid = 720 }
+
+-- The week's goals: three drawn each week (the same for the whole week), a chest once all are done.
+ns.WEEK_GOALS = {
+	{ key = "won", count = 10 }, { key = "dungeons", count = 3 }, { key = "raids", count = 1 },
+	{ key = "levels", count = 15 }, { key = "gear", count = 4 }, { key = "contracts", count = 2 },
+	{ key = "orders", count = 3 }, { key = "trophies", count = 2 },
+}
+ns.WEEK_PICK = 3
+ns.WEEK_START = 4 * 86400 -- (weeks begin on Mondays: the first Monday after the epoch)
+
+-- The armory: when it keeps them, the pieces no better than what is worn and those better ones replaced wait
+-- there (so many at most), to be given to another or taken apart.
+ns.ARMORY_MAX = 40
+
+-- The dungeons and raids by the zone of their door (for the expeditions' map).
+ns.ENTRANCES = {
+	[2437] = 14, [16919] = 1, [16611] = 85, [718] = 17, [1581] = 40, [209] = 130, [719] = 331, [717] = 12, [16732] = 11,
+	[16544] = 36, [133] = 1, [1717] = 17, [796] = 85, [722] = 17, [1517] = 3, [978] = 440, [2100] = 405, [1417] = 8,
+	[1584] = 51, [1583] = 46, [2557] = 357, [2017] = 139, [2057] = 28,
+	[1977] = 33, [3429] = 1377, [2717] = 51, [2159] = 15, [2677] = 46, [3428] = 1377, [3456] = 139,
+}
