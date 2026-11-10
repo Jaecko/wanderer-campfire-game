@@ -221,7 +221,7 @@ end
 
 local function NewRow(list)
 	local row = CreateFrame("Button", nil, list)
-	row:RegisterForClicks("LeftButtonUp", "RightButtonUp")
+	row:RegisterForClicks("LeftButtonUp", "RightButtonUp") row.padRight = true
 	row.ground = row:CreateTexture(nil, "BACKGROUND")
 	row.ground:SetAllPoints()
 	row.edges = Skin.Edges(row, 1, 1, 1, 0.07)

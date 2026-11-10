@@ -373,7 +373,7 @@ local function NewSlot(parent, slot)
 	square:SetScript("OnLeave", function() GameTooltip:Hide() end)
 	-- (clicked: what the armory holds for this slot)
 	square:SetScript("OnMouseUp", function(self, button)
-		if button ~= "LeftButton" or not self:IsMouseOver() then return end
+		if button ~= "LeftButton" or not (U.Hovered and U.Hovered(self) or self:IsMouseOver()) then return end
 		Skin.Play("click")
 		ns.ShowPage("armory", { id = ns.CurrentArg(), slot = slot })
 	end)
