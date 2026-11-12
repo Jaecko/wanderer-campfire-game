@@ -1004,6 +1004,19 @@ BINDING_HEADER_WANDERERCAMPFIREGAME = "Wanderer Campfire Game"
 BINDING_NAME_WANDERERCAMPFIREGAME_TOGGLE = L.TITLE
 function WandererCampfireGame_Toggle() ns.Toggle() end
 
+-- The last version: Campfire is no longer followed. Said once to each character, a while after arriving; the camp
+-- keeps working as it is for whoever keeps it.
+function ns.Farewell()
+	local db = _G.WandererCampfireGameDB
+	if type(db) ~= "table" or db.farewell then return end
+	db.farewell = true
+	if W.Toast then
+		W.Toast(L.FAREWELL_TITLE, L.FAREWELL_TEXT, { kicker = L.ADDON, corner = true, duration = 12, icon = "Interface\\Icons\\Spell_Fire_Fire" })
+	else
+		W.Print(L.FAREWELL_TEXT)
+	end
+end
+
 function ns.Init()
 	if not (W and W.RegisterExtension) then return end
 	-- (built on Wanderer's API 15: an older Wanderer is only asked to update, nothing of it is called)
@@ -1054,6 +1067,8 @@ function ns.Init()
 			ns.Back(ns.Update())
 		end)
 	end)
+	-- (the last version: said once, a while after arriving)
+	C_Timer.After(20, ns.Farewell)
 end
 
 if W and W.WhenLoaded then W.WhenLoaded(ADDON, ns.Init) elseif W and W.Print then W.Print(L.NEEDS_WANDERER) end

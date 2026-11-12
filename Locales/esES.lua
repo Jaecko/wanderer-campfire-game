@@ -636,4 +636,6 @@ ns.LOCALES.esES = {
 	CANDIDATE_KEPT = "Guardado",
 	CANDIDATE_KEEP = "Clic: guardar este candidato en los próximos sorteos (uno como máximo).",
 	CANDIDATE_LET_GO = "Clic: dejarlo marchar en el próximo sorteo.",
+	FAREWELL_TITLE = "Última versión de Campfire",
+	FAREWELL_TEXT = "Wanderer Campfire Game ya no recibe seguimiento: esta es su última versión. Tu campamento sigue funcionando tal cual; también puedes desinstalarlo en la aplicación de CurseForge. Gracias por las veladas junto al fuego.",
 }

@@ -636,4 +636,6 @@ ns.LOCALES.deDE = {
 	CANDIDATE_KEPT = "Behalten",
 	CANDIDATE_KEEP = "Klick: diesen Kandidaten bei den nächsten Ziehungen behalten (höchstens einen).",
 	CANDIDATE_LET_GO = "Klick: ihn bei der nächsten Ziehung gehen lassen.",
+	FAREWELL_TITLE = "Die letzte Version von Campfire",
+	FAREWELL_TEXT = "Wanderer Campfire Game wird nicht mehr weiterentwickelt: dies ist seine letzte Version. Dein Lager funktioniert weiter wie bisher; du kannst es auch in der CurseForge-App deinstallieren. Danke für die Abende am Feuer.",
 }

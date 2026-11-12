@@ -1,4 +1,4 @@
-# Wanderer Campfire Game 1.2.2
+# Wanderer Campfire Game 1.3.0
 
-### Changed
-- With the game's controller interface on, the top button acts as a right click on the lists, and the gear squares of a companion's sheet answer the bottom button. Needs Wanderer 1.4.36 or later.
+The last version
+- Wanderer Campfire Game is no longer followed: this is its last version. Your camp keeps working as it is, and each character is told once, quietly. Thank you for the evenings by the fire.

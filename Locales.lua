@@ -640,6 +640,8 @@ local LOCALES = {
 		CANDIDATE_KEPT = "Kept",
 		CANDIDATE_KEEP = "Click: keep this one through the next draws (one at most).",
 		CANDIDATE_LET_GO = "Click: let this one go with the next draw.",
+		FAREWELL_TITLE = "Campfire's last version",
+		FAREWELL_TEXT = "Wanderer Campfire Game is no longer followed: this is its last version. Your camp keeps working as it is; you may also uninstall it in the CurseForge app. Thank you for the evenings by the fire.",
 	},
 }
 ns.LOCALES = LOCALES

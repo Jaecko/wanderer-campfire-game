@@ -636,4 +636,6 @@ ns.LOCALES.zhCN = {
 	CANDIDATE_KEPT = "已保留",
 	CANDIDATE_KEEP = "点击：在之后的抽选中保留这位候选人（最多一位）。",
 	CANDIDATE_LET_GO = "点击：在下次抽选时让其离开。",
+	FAREWELL_TITLE = "Campfire 最后版本",
+	FAREWELL_TEXT = "Wanderer Campfire Game 不再维护：这是它的最后一个版本。你的营地会照常运作；你也可以在 CurseForge 应用中卸载它。感谢那些篝火旁的夜晚。",
 }

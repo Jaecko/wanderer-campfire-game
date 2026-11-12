@@ -636,4 +636,6 @@ ns.LOCALES.koKR = {
 	CANDIDATE_KEPT = "보관됨",
 	CANDIDATE_KEEP = "클릭: 다음 추첨에도 이 후보를 남깁니다(최대 한 명).",
 	CANDIDATE_LET_GO = "클릭: 다음 추첨 때 보냅니다.",
+	FAREWELL_TITLE = "Campfire 마지막 버전",
+	FAREWELL_TEXT = "Wanderer Campfire Game은 더 이상 관리되지 않습니다: 이것이 마지막 버전입니다. 야영지는 그대로 작동하며, CurseForge 앱에서 제거할 수도 있습니다. 모닥불 곁의 저녁에 감사드립니다.",
 }
